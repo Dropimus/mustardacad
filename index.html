@@ -217,6 +217,13 @@ body::after{width:500px;height:500px;right:-210px;top:40%;
   .g2{grid-template-columns:1fr;gap:40px}
 }
 @media(max-width:580px){.g3,.g4,.g6{grid-template-columns:1fr}}
+@media(max-width:640px){
+  html,body{max-width:100%;overflow-x:hidden}
+  body::before,body::after,.aurora{display:none}
+  .ticker-wrap{overflow-x:clip}
+  .ticker{will-change:transform}
+  .section-mark{display:none}
+}
 
 .phil-card{background:var(--panel);backdrop-filter:blur(18px) saturate(140%);
   border:1px solid var(--line-s);border-radius:var(--r);
