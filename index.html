@@ -213,10 +213,11 @@ body::after{width:500px;height:500px;right:-210px;top:40%;
 .g6{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:52px;align-items:center}
 @media(max-width:980px){
-  .g3,.g4,.g6{grid-template-columns:repeat(2,1fr)}
+  .g4,.g6{grid-template-columns:repeat(2,1fr)}
   .g2{grid-template-columns:1fr;gap:40px}
 }
-@media(max-width:580px){.g3,.g4,.g6{grid-template-columns:1fr}}
+@media(max-width:760px){.g3{grid-template-columns:1fr}}
+@media(max-width:580px){.g4,.g6{grid-template-columns:1fr}}
 @media(max-width:640px){
   html,body{max-width:100%;overflow-x:hidden}
   body::before,body::after,.aurora{display:none}
@@ -808,7 +809,7 @@ const cntObs = new IntersectionObserver(es => es.forEach(e => {
 }), { threshold: .4 });
 document.querySelectorAll('.cnt').forEach(el => cntObs.observe(el));
 
-/* Market ticker */
+/* Market ticker — seeded with last-known values, replaced by live data on load */
 const tickerData = [
   { s: 'EUR/USD', v: '1.0842', d: 'up' }, { s: 'GBP/USD', v: '1.2691', d: 'down' },
   { s: 'BTC/USD', v: '68,240', d: 'up' }, { s: 'ETH/USD', v: '3,512', d: 'up' },
@@ -816,12 +817,82 @@ const tickerData = [
   { s: 'XAU/USD', v: '2,318', d: 'up' }, { s: 'USD/NGN', v: '1,542', d: 'down' },
 ];
 const tickerRow = document.getElementById('tickerRow');
-if (tickerRow) {
+const TICKER_DECIMALS = { 'EUR/USD': 4, 'GBP/USD': 4, 'BTC/USD': 0, 'ETH/USD': 0, 'USD/JPY': 2, 'SOL/USD': 2, 'XAU/USD': 0, 'USD/NGN': 0 };
+const TICKER_LAST_KEY = 'ma_ticker_last_v1';
+
+function renderTicker() {
+  if (!tickerRow) return;
   const arrow = { up: '▲', down: '▼' };
   const mk = () => tickerData.map(t =>
     `<span class="${t.d}"><b>${t.s}</b>${t.v}<span>${arrow[t.d]}</span></span>`
   ).join('');
   tickerRow.innerHTML = mk() + mk();
+}
+renderTicker();
+
+async function fetchJSON(url, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms || 8000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error('bad response');
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchLivePrices() {
+  const live = {};
+
+  try {
+    const cg = await fetchJSON('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,pax-gold&vs_currencies=usd&include_24hr_change=true');
+    if (cg.bitcoin) live['BTC/USD'] = { v: cg.bitcoin.usd, up: cg.bitcoin.usd_24h_change >= 0 };
+    if (cg.ethereum) live['ETH/USD'] = { v: cg.ethereum.usd, up: cg.ethereum.usd_24h_change >= 0 };
+    if (cg.solana) live['SOL/USD'] = { v: cg.solana.usd, up: cg.solana.usd_24h_change >= 0 };
+    if (cg['pax-gold']) live['XAU/USD'] = { v: cg['pax-gold'].usd, up: cg['pax-gold'].usd_24h_change >= 0 };
+  } catch (e) { /* keep previously rendered crypto prices */ }
+
+  try {
+    const fx = await fetchJSON('https://open.er-api.com/v6/latest/USD');
+    if (fx && fx.rates) {
+      if (fx.rates.EUR) live['EUR/USD'] = { v: 1 / fx.rates.EUR };
+      if (fx.rates.GBP) live['GBP/USD'] = { v: 1 / fx.rates.GBP };
+      if (fx.rates.JPY) live['USD/JPY'] = { v: fx.rates.JPY };
+      if (fx.rates.NGN) live['USD/NGN'] = { v: fx.rates.NGN };
+    }
+  } catch (e) { /* keep previously rendered forex prices */ }
+
+  return live;
+}
+
+async function refreshTicker() {
+  const live = await fetchLivePrices();
+  if (Object.keys(live).length === 0) return;
+
+  let prev = {};
+  try { prev = JSON.parse(localStorage.getItem(TICKER_LAST_KEY)) || {}; } catch (e) {}
+
+  tickerData.forEach(t => {
+    const l = live[t.s];
+    if (!l || typeof l.v !== 'number' || !isFinite(l.v)) return;
+    const decimals = TICKER_DECIMALS[t.s] ?? 2;
+    t.v = l.v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    if (typeof l.up === 'boolean') {
+      t.d = l.up ? 'up' : 'down';
+    } else if (typeof prev[t.s] === 'number') {
+      t.d = l.v >= prev[t.s] ? 'up' : 'down';
+    }
+    prev[t.s] = l.v;
+  });
+
+  try { localStorage.setItem(TICKER_LAST_KEY, JSON.stringify(prev)); } catch (e) {}
+  renderTicker();
+}
+
+if (tickerRow) {
+  refreshTicker();
+  setInterval(refreshTicker, 5 * 60 * 1000);
 }
 
 const form = document.getElementById('joinForm');
