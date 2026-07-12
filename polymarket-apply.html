@@ -132,9 +132,6 @@
   .btn:focus-visible{outline:2px solid var(--green-bright);outline-offset:2px}
   .btn-open{background:var(--green);color:#04210a}
   .btn-open:hover{filter:brightness(1.08)}
-  .btn-confirm{background:transparent;border:1px solid var(--line);color:var(--green-bright)}
-  .btn-confirm:hover{background:rgba(95,224,0,.08)}
-  .btn-confirm.hidden{display:none}
   .task.done{border-color:var(--line);background:rgba(95,224,0,.05)}
   .task.done .ic{background:rgba(95,224,0,.16)}
   .check{margin-left:auto;width:26px;height:26px;border-radius:50%;flex:none;
@@ -142,6 +139,11 @@
   .task.done .check{background:var(--green);border-color:var(--green)}
   .check svg{width:14px;height:14px;opacity:0;transition:.3s;stroke:#04210a}
   .task.done .check svg{opacity:1}
+  .checking-pill{display:none;align-items:center;gap:7px;font-family:"Space Mono";font-size:11px;
+    color:var(--muted);letter-spacing:.05em}
+  .checking-pill.show{display:inline-flex}
+  .checking-pill .spin3{width:12px;height:12px;border:2px solid rgba(95,224,0,.25);
+    border-top-color:var(--green);border-radius:50%;display:inline-block;animation:spin .7s linear infinite}
   .done-pill{font-family:"Space Mono";font-size:11px;color:var(--green-bright);
     letter-spacing:.05em;display:none}
   .task.done .done-pill{display:inline}
@@ -377,22 +379,25 @@ TASKS.forEach((t, i) => {
         <button class="btn btn-open">${t.cta}
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#04210a" stroke-width="2.4" stroke-linecap="round"><path d="M7 17 17 7M9 7h8v8"/></svg>
         </button>
-        <button class="btn btn-confirm hidden">I've done this ✓</button>
+        <span class="checking-pill"><span class="spin3"></span> Marking complete…</span>
         <span class="done-pill">Completed</span>
       </div>
     </div>
     <div class="check"><svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></div>
   `;
   const openBtn = el.querySelector(".btn-open");
-  const confirmBtn = el.querySelector(".btn-confirm");
+  const checkingEl = el.querySelector(".checking-pill");
 
   openBtn.addEventListener("click", () => {
     if (t.link === "share") { doShare(); }
     else { window.open(t.link, "_blank", "noopener"); }
     openBtn.style.display = "none";
-    confirmBtn.classList.remove("hidden");
+    checkingEl.classList.add("show");
+    setTimeout(() => {
+      checkingEl.classList.remove("show");
+      complete(t.id, el);
+    }, 900);
   });
-  confirmBtn.addEventListener("click", () => complete(t.id, el));
 
   listEl.appendChild(el);
 });
