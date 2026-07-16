@@ -538,7 +538,7 @@ async function submitApplication(){
     const res = await fetch(CONFIG.endpoint, {
       method:"POST",
       headers:{ "Content-Type":"text/plain;charset=utf-8" }, // text/plain avoids a CORS preflight to Apps Script
-      body: JSON.stringify({ name, username, email })
+      body: JSON.stringify({ name, username, email, source: "Polymarket Application" })
     });
     const data = await res.json();
     handleResponse(data);

@@ -1,7 +1,8 @@
 /**
  * Mustard Academy — Polymarket class application backend.
  *
- * What this does: records each application (name, username, email) in a
+ * What this does: records every lead submitted from any of the site's
+ * forms (main site, Polymarket page, Polymarket application) in one
  * Google Sheet, prevents the same email from being recorded twice, and
  * issues each applicant an Application ID. Follow/community verification
  * itself is done manually by an admin (checking the X followers list and
@@ -19,7 +20,8 @@
  *   6. Paste that URL into CONFIG.endpoint in polymarket-apply.html.
  *
  * The script creates an "Applications" sheet automatically the first time
- * it runs, with header row: Timestamp | Name | Username | Email | Application ID
+ * it runs, with header row:
+ *   Timestamp | Name | Username | Email | Track | Source | Application ID
  */
 
 const SHEET_NAME = "Applications";
@@ -37,6 +39,8 @@ function doPost(e) {
   const name = (body.name || "").toString().trim();
   const username = (body.username || "").toString().trim();
   const email = (body.email || "").toString().trim().toLowerCase();
+  const track = (body.track || "").toString().trim();
+  const source = (body.source || "Polymarket Application").toString().trim();
 
   if (name.length < 2 || !EMAIL_RE.test(email)) {
     return respond_({ status: "error", message: "Missing or invalid name/email." });
@@ -45,11 +49,11 @@ function doPost(e) {
   const sheet = getSheet_();
   const existing = findByEmail_(sheet, email);
   if (existing) {
-    return respond_({ status: "duplicate", appId: existing[4], telegramLink: TELEGRAM_LINK });
+    return respond_({ status: "duplicate", appId: existing[6], telegramLink: TELEGRAM_LINK });
   }
 
   const appId = generateAppId_();
-  sheet.appendRow([new Date(), name, username, email, appId]);
+  sheet.appendRow([new Date(), name, username, email, track, source, appId]);
   return respond_({ status: "confirmed", appId: appId, telegramLink: TELEGRAM_LINK });
 }
 
@@ -58,7 +62,7 @@ function getSheet_() {
   let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAME);
-    sheet.appendRow(["Timestamp", "Name", "Username", "Email", "Application ID"]);
+    sheet.appendRow(["Timestamp", "Name", "Username", "Email", "Track", "Source", "Application ID"]);
   }
   return sheet;
 }

@@ -906,6 +906,7 @@ const fErr = document.getElementById('fErr');
 const joinRes = document.getElementById('joinRes');
 const ADMIN_WA = '2349067195953';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ENDPOINT = 'https://script.google.com/macros/s/AKfycbxiTs3bNygd12dUjvigeuXXEoJnHBIQmaX7q7uNha8vlV6odbXd9UfskSbrSU-OBkQ/exec';
 
 function setLoading(on) {
   joinBtn.disabled = on; spin.hidden = !on;
@@ -925,14 +926,29 @@ form.addEventListener('submit', async e => {
 
   setLoading(true);
   try {
-    const msg = `Hi Mustard Academy! I'd love to start learning.%0A%0AName: ${encodeURIComponent(name)}%0AEmail: ${encodeURIComponent(email)}%0AArea of interest: ${encodeURIComponent(track)}`;
-    window.open(`https://wa.me/${ADMIN_WA}?text=${msg}`, '_blank', 'noopener');
+    if (!ENDPOINT || ENDPOINT.includes('REPLACE')) {
+      const msg = `Hi Mustard Academy! I'd love to start learning.%0A%0AName: ${encodeURIComponent(name)}%0AEmail: ${encodeURIComponent(email)}%0AArea of interest: ${encodeURIComponent(track)}`;
+      window.open(`https://wa.me/${ADMIN_WA}?text=${msg}`, '_blank', 'noopener');
+    } else {
+      const res = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ name, email, track, source: 'Main Site' })
+      });
+      const data = await res.json();
+      const status = (data && data.status) || 'error';
+      if (status !== 'confirmed' && status !== 'duplicate') {
+        throw new Error((data && data.message) || 'Submission failed');
+      }
+    }
     document.getElementById('resP').textContent =
       `Thanks, ${name}! We'll reach out by email with everything you need to get started.`;
     joinRes.classList.add('show');
     burstConfetti();
     form.querySelectorAll('input,select').forEach(f => f.disabled = true);
     joinBtn.style.display = 'none';
+  } catch (err) {
+    fErr.textContent = "Couldn't reach the server. Check your connection and try again.";
   } finally {
     setLoading(false);
   }
