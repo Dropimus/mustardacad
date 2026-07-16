@@ -1,12 +1,14 @@
 /**
  * Mustard Academy — Polymarket class application backend.
  *
- * What this does: records each application (name, username, phone) in a
- * Google Sheet and prevents the same phone number from being recorded
- * twice. It does NOT verify that an applicant actually followed on X or
- * joined the WhatsApp community — no serverless function can check that
- * without each platform's own API access, so this only tracks self-reported
- * checklist completion plus real submitted contact details.
+ * What this does: records each application (name, username, email) in a
+ * Google Sheet, prevents the same email from being recorded twice, and
+ * issues each applicant an Application ID. Follow/community verification
+ * itself is done manually by an admin (checking the X followers list and
+ * the submitted email), not by this script — no serverless function can
+ * check that without each platform's own API access. The Application ID
+ * exists so the applicant can quote it when requesting to join Telegram,
+ * letting the Telegram admin cross-reference it against this sheet.
  *
  * Deploy:
  *   1. Create a Google Sheet (or open an existing one).
@@ -17,11 +19,12 @@
  *   6. Paste that URL into CONFIG.endpoint in polymarket-apply.html.
  *
  * The script creates an "Applications" sheet automatically the first time
- * it runs, with header row: Timestamp | Name | Username | Phone
+ * it runs, with header row: Timestamp | Name | Username | Email | Application ID
  */
 
 const SHEET_NAME = "Applications";
 const TELEGRAM_LINK = "https://t.me/MustardAcademy";
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function doPost(e) {
   let body;
@@ -33,20 +36,21 @@ function doPost(e) {
 
   const name = (body.name || "").toString().trim();
   const username = (body.username || "").toString().trim();
-  const phoneRaw = (body.phone || "").toString().trim();
-  const phone = phoneRaw.replace(/\D/g, "");
+  const email = (body.email || "").toString().trim().toLowerCase();
 
-  if (name.length < 2 || phone.length < 7) {
-    return respond_({ status: "error", message: "Missing or invalid name/phone." });
+  if (name.length < 2 || !EMAIL_RE.test(email)) {
+    return respond_({ status: "error", message: "Missing or invalid name/email." });
   }
 
   const sheet = getSheet_();
-  if (findByPhone_(sheet, phone)) {
-    return respond_({ status: "duplicate", telegramLink: TELEGRAM_LINK });
+  const existing = findByEmail_(sheet, email);
+  if (existing) {
+    return respond_({ status: "duplicate", appId: existing[4], telegramLink: TELEGRAM_LINK });
   }
 
-  sheet.appendRow([new Date(), name, username, phoneRaw]);
-  return respond_({ status: "confirmed", telegramLink: TELEGRAM_LINK });
+  const appId = generateAppId_();
+  sheet.appendRow([new Date(), name, username, email, appId]);
+  return respond_({ status: "confirmed", appId: appId, telegramLink: TELEGRAM_LINK });
 }
 
 function getSheet_() {
@@ -54,18 +58,22 @@ function getSheet_() {
   let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAME);
-    sheet.appendRow(["Timestamp", "Name", "Username", "Phone"]);
+    sheet.appendRow(["Timestamp", "Name", "Username", "Email", "Application ID"]);
   }
   return sheet;
 }
 
-function findByPhone_(sheet, phone) {
+function findByEmail_(sheet, email) {
   const values = sheet.getDataRange().getValues();
   for (let i = 1; i < values.length; i++) {
-    const rowPhone = (values[i][3] || "").toString().replace(/\D/g, "");
-    if (rowPhone && rowPhone === phone) return values[i];
+    const rowEmail = (values[i][3] || "").toString().trim().toLowerCase();
+    if (rowEmail && rowEmail === email) return values[i];
   }
   return null;
+}
+
+function generateAppId_() {
+  return "MA-" + Utilities.getUuid().split("-")[0].toUpperCase();
 }
 
 function respond_(obj) {

@@ -208,6 +208,9 @@
   .result.ok{background:rgba(95,224,0,.12);border:1px solid var(--line);color:#e2fbd1}
   .result.bad{background:rgba(255,90,77,.08);border:1px solid rgba(255,90,77,.3);color:#ffd2cc}
   .result b{color:var(--green-bright)}
+  .app-id{font-family:"Space Mono";font-size:12px;color:#dae4d9;line-height:1.6;
+    margin-top:9px;padding-top:9px;border-top:1px dashed var(--line-soft)}
+  .app-id b{color:var(--green-bright);letter-spacing:.03em}
   .result a.cls{display:inline-flex;align-items:center;gap:7px;margin-top:11px;background:var(--green);
     color:#04210a;font-weight:700;text-decoration:none;padding:11px 16px;border-radius:10px;font-size:14px}
   .result a.cls:hover{filter:brightness(1.07)}
@@ -296,11 +299,11 @@
     <div class="accepted" id="accepted">
       <div class="resolved" id="resHead"><span class="spin2"></span> Reviewing your application</div>
       <h2 id="resTitle">Confirm your details</h2>
-      <p class="sub" id="resSub">Enter your details below. We'll follow up on WhatsApp with everything you need for class.</p>
+      <p class="sub" id="resSub">Enter your details below. We'll follow up by email with everything you need for class.</p>
       <div class="form">
         <input id="fName" type="text" placeholder="Your name" autocomplete="name" />
         <input id="fUser" type="text" placeholder="Your @username (X or Telegram)" autocomplete="username" />
-        <input id="fPhone" type="tel" placeholder="WhatsApp number (e.g. 0906 719 5953)" autocomplete="tel" inputmode="tel" />
+        <input id="fEmail" type="email" placeholder="Your email address" autocomplete="email" inputmode="email" />
         <div class="err" id="formErr"></div>
         <button class="join" id="joinBtn">
           <span class="lbl">Submit application</span>
@@ -342,6 +345,7 @@ const CONFIG = {
   adminWhatsApp: "2349067195953",
   socials: {
     x:"https://x.com/MustardAcademy_",
+    instagram:"https://www.instagram.com/mustardacademy8",
     telegram:"https://t.me/MustardAcademy",
     whatsapp:"https://wa.me/2349067195953",
     website:"https://mustardacad.com",
@@ -420,6 +424,7 @@ const lbl         = joinBtn.querySelector(".lbl");
 const resultEl    = document.getElementById("result");
 const TICK = `<svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg>`;
 const reduceMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /* ---------- progress chart — driven entirely by real checklist state ---------- */
 const cv  = document.getElementById("chart");
@@ -512,16 +517,16 @@ joinBtn.addEventListener("click", submitApplication);
 async function submitApplication(){
   const name = document.getElementById("fName").value.trim();
   const username = document.getElementById("fUser").value.trim();
-  const phone = document.getElementById("fPhone").value.trim();
+  const email = document.getElementById("fEmail").value.trim();
   const err = document.getElementById("formErr");
   resultEl.className = "result";
   if (name.length < 2){ err.textContent = "Please enter your name."; return; }
-  if (phone.replace(/\D/g,"").length < 7){ err.textContent = "Please enter a valid WhatsApp number."; return; }
+  if (!EMAIL_RE.test(email)){ err.textContent = "Please enter a valid email address."; return; }
   err.textContent = "";
 
   if (!CONFIG.endpoint || CONFIG.endpoint.includes("REPLACE")){
     // No backend configured yet → forward the details by WhatsApp so the page still works.
-    const msg = `Hi Mustard Academy! I completed the checklist for the *Introduction to Polymarket* class.%0A%0AName: ${encodeURIComponent(name)}%0AUsername: ${encodeURIComponent(username||"-")}%0AWhatsApp: ${encodeURIComponent(phone)}`;
+    const msg = `Hi Mustard Academy! I completed the checklist for the *Introduction to Polymarket* class.%0A%0AName: ${encodeURIComponent(name)}%0AUsername: ${encodeURIComponent(username||"-")}%0AEmail: ${encodeURIComponent(email)}`;
     window.open(`https://wa.me/${CONFIG.adminWhatsApp}?text=${msg}`, "_blank", "noopener");
     handleResponse({ status:"confirmed", telegramLink: CONFIG.telegramLink });
     return;
@@ -533,7 +538,7 @@ async function submitApplication(){
     const res = await fetch(CONFIG.endpoint, {
       method:"POST",
       headers:{ "Content-Type":"text/plain;charset=utf-8" }, // text/plain avoids a CORS preflight to Apps Script
-      body: JSON.stringify({ name, username, phone })
+      body: JSON.stringify({ name, username, email })
     });
     const data = await res.json();
     handleResponse(data);
@@ -548,8 +553,12 @@ async function submitApplication(){
 function handleResponse(data){
   const status = (data && data.status) || "error";
   const tgLink = (data && data.telegramLink) || CONFIG.telegramLink;
+  const appId = data && data.appId;
   const tgBtn = `<a class="cls" href="${tgLink}" target="_blank" rel="noopener">Request to join Telegram
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#04210a" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>`;
+  const idNote = appId
+    ? `<div class="app-id">Your Application ID: <b>${appId}</b><br>Quote this when you request to join Telegram, so the admin can verify you.</div>`
+    : "";
 
   if (status==="confirmed" || status==="duplicate"){
     animateTo(100, 400);
@@ -558,11 +567,11 @@ function handleResponse(data){
     acceptedEl.classList.add("done");
     resHead.innerHTML = `<span class="tick">${TICK}</span> Application received`;
     resTitle.textContent = "You're in! 🎉";
-    resSub.textContent = "Tap below and hit Request to join — we'll add you to the private Telegram class group.";
+    resSub.textContent = "We'll check your X follow and email, then you can request to join Telegram below.";
     hideForm();
     showResult("ok", (status==="duplicate"
       ? "<b>You'd already applied ✓</b> Here's your link again."
-      : "<b>Received ✓</b> Your application is in.") + tgBtn);
+      : "<b>Received ✓</b> Your application is in.") + idNote + tgBtn);
     burstConfetti();
   } else {
     resHead.innerHTML = '<span class="spin2"></span> Awaiting details';
@@ -571,7 +580,7 @@ function handleResponse(data){
 }
 
 function hideForm(){
-  ["fName","fUser","fPhone","formErr"].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display="none"; });
+  ["fName","fUser","fEmail","formErr"].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display="none"; });
   joinBtn.style.display="none";
 }
 
@@ -604,6 +613,7 @@ function doShare(){
 /* ---------- footer ---------- */
 document.getElementById("footer").innerHTML = `
   <a href="${CONFIG.socials.x}" target="_blank" rel="noopener">${icoX(14)} @MustardAcademy_</a>
+  <a href="${CONFIG.socials.instagram}" target="_blank" rel="noopener">${icoIG(14)} @mustardacademy8</a>
   <a href="${CONFIG.socials.telegram}" target="_blank" rel="noopener">${icoTG(14)} MustardAcademy</a>
   <a href="${CONFIG.socials.whatsapp}" target="_blank" rel="noopener">${icoWA(14)} WhatsApp</a>
   <a href="${CONFIG.socials.website}" target="_blank" rel="noopener">${icoGlobe(14)} mustardacad.com</a>
@@ -635,6 +645,7 @@ function icoPM(s=19){return `<svg viewBox="0 0 24 24" width="${s}" height="${s}"
 function icoShare(s=19){return `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="#5fe000" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>`}
 function icoGlobe(s=14){return `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 3 2.5 15 0 18M12 3c-2.5 3-2.5 15 0 18"/></svg>`}
 function icoMail(s=14){return `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></svg>`}
+function icoIG(s=14){return `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.3" cy="6.7" r="1.1" fill="currentColor" stroke="none"/></svg>`}
 </script>
 </body>
 </html>

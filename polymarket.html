@@ -530,11 +530,11 @@ body::after{width:500px;height:500px;right:-210px;top:40%;
         <div>
           <span class="eyebrow">Get Started</span>
           <h2>Ready to trade smarter?</h2>
-          <p class="sub">Tell us a little about you — we'll reach out on WhatsApp with everything you need for the next Polymarket class.</p>
+          <p class="sub">Tell us a little about you — we'll reach out by email with everything you need for the next Polymarket class.</p>
         </div>
         <form class="form" id="joinForm" novalidate>
           <input id="fName" type="text" placeholder="Your name" autocomplete="name" required/>
-          <input id="fPhone" type="tel" placeholder="WhatsApp number (e.g. 0906 719 5953)" autocomplete="tel" inputmode="tel" required/>
+          <input id="fEmail" type="email" placeholder="Your email address" autocomplete="email" inputmode="email" required/>
           <input type="hidden" id="fTrack" value="Polymarket"/>
           <div class="err" id="fErr"></div>
           <button class="submit" id="joinBtn" type="submit">
@@ -592,6 +592,9 @@ body::after{width:500px;height:500px;right:-210px;top:40%;
       <div class="f-soc">
         <a href="https://x.com/MustardAcademy_" target="_blank" rel="noopener" aria-label="X">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2H21.5l-7.5 8.57L23 22h-6.9l-5.4-7.06L4.5 22H1.24l8.02-9.17L1 2h7.07l4.88 6.45L18.244 2Zm-1.21 18h1.9L7.03 4H5L17.034 20Z"/></svg>
+        </a>
+        <a href="https://www.instagram.com/mustardacademy8" target="_blank" rel="noopener" aria-label="Instagram">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.3" cy="6.7" r="1.1" fill="currentColor" stroke="none"/></svg>
         </a>
         <a href="https://t.me/MustardAcademy" target="_blank" rel="noopener" aria-label="Telegram">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.3 18.6 19.6c-.2.9-.8 1.1-1.6.7l-4.4-3.2-2.1 2c-.2.2-.4.4-.9.4l.3-4.5 8.2-7.4c.4-.3-.1-.5-.6-.2L7.1 13l-4.4-1.4c-.9-.3-1-.9.2-1.4L20.6 3c.8-.3 1.5.2 1.3 1.3Z"/></svg>
@@ -723,6 +726,7 @@ const btnLbl = document.getElementById('btnLbl');
 const fErr = document.getElementById('fErr');
 const joinRes = document.getElementById('joinRes');
 const ADMIN_WA = '2349067195953';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function setLoading(on) {
   joinBtn.disabled = on; spin.hidden = !on;
@@ -733,18 +737,18 @@ function setLoading(on) {
 form.addEventListener('submit', async e => {
   e.preventDefault();
   const name = document.getElementById('fName').value.trim();
-  const phone = document.getElementById('fPhone').value.trim();
+  const email = document.getElementById('fEmail').value.trim();
   const track = document.getElementById('fTrack').value;
   fErr.textContent = '';
   if (name.length < 2) { fErr.textContent = 'Enter your name to continue.'; return; }
-  if (phone.replace(/\D/g, '').length < 7) { fErr.textContent = 'Enter a valid WhatsApp number.'; return; }
+  if (!EMAIL_RE.test(email)) { fErr.textContent = 'Enter a valid email address.'; return; }
 
   setLoading(true);
   try {
-    const msg = `Hi Mustard Academy! I'd love to join the next Polymarket cohort.%0A%0AName: ${encodeURIComponent(name)}%0AWhatsApp: ${encodeURIComponent(phone)}%0ATrack: ${encodeURIComponent(track)}`;
+    const msg = `Hi Mustard Academy! I'd love to join the next Polymarket cohort.%0A%0AName: ${encodeURIComponent(name)}%0AEmail: ${encodeURIComponent(email)}%0ATrack: ${encodeURIComponent(track)}`;
     window.open(`https://wa.me/${ADMIN_WA}?text=${msg}`, '_blank', 'noopener');
     document.getElementById('resP').textContent =
-      `Thanks, ${name}! We'll reach out on WhatsApp with everything you need for the next class.`;
+      `Thanks, ${name}! We'll reach out by email with everything you need for the next class.`;
     joinRes.classList.add('show');
     burstConfetti();
     form.querySelectorAll('input,select').forEach(f => f.disabled = true);
