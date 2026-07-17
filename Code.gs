@@ -5,11 +5,17 @@
  * forms (main site, Polymarket page, Polymarket application) in one
  * Google Sheet, prevents the same email from being recorded twice, and
  * issues each applicant an Application ID. Follow/community verification
- * itself is done manually by an admin (checking the X followers list and
- * the submitted email), not by this script — no serverless function can
- * check that without each platform's own API access. The Application ID
- * exists so the applicant can quote it when requesting to join Telegram,
- * letting the Telegram admin cross-reference it against this sheet.
+ * (X follow, Telegram, Polymarket account) is done manually by an admin,
+ * not by this script — no serverless function can check that without
+ * each platform's own API access.
+ *
+ * The one exception is the "invite a friend" referral step: each
+ * applicant gets a unique referral code baked into their personal
+ * invite link (?ref=CODE). When someone submits the form after arriving
+ * via that link, this script logs the code that referred them. The
+ * "Invite a friend" checklist step only completes once a GET request
+ * confirms at least one submission carries the applicant's code — that
+ * part is real, verifiable, and needs no external API.
  *
  * Deploy:
  *   1. Create a Google Sheet (or open an existing one).
@@ -17,16 +23,23 @@
  *   3. Deploy -> New deployment -> type "Web app".
  *   4. Execute as: Me. Who has access: Anyone.
  *   5. Deploy, then copy the "Web app URL" (ends in /exec).
- *   6. Paste that URL into CONFIG.endpoint in polymarket-apply.html.
+ *   6. Paste that URL into CONFIG.endpoint / ENDPOINT in index.html,
+ *      polymarket.html, and polymarket-apply.html.
  *
- * The script creates an "Applications" sheet automatically the first time
- * it runs, with header row:
- *   Timestamp | Name | Username | Email | Track | Source | Application ID
+ * The script creates an "Applications" sheet automatically the first
+ * time it runs (and tops up the header row on an existing sheet), with
+ * header row:
+ *   Timestamp | Name | Username | Email | Track | Source |
+ *   Application ID | Telegram | Polymarket | Referral Code | Referred By
+ *
+ * New columns are appended after the original seven so existing rows
+ * from before this change stay aligned.
  */
 
 const SHEET_NAME = "Applications";
 const TELEGRAM_LINK = "https://t.me/MustardAcademy";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const HEADERS = ["Timestamp", "Name", "Username", "Email", "Track", "Source", "Application ID", "Telegram", "Polymarket", "Referral Code", "Referred By"];
 
 function doPost(e) {
   let body;
@@ -37,10 +50,14 @@ function doPost(e) {
   }
 
   const name = (body.name || "").toString().trim();
-  const username = (body.username || "").toString().trim();
+  const xHandle = (body.xHandle || body.username || "").toString().trim();
+  const telegram = (body.telegram || "").toString().trim();
+  const polymarket = (body.polymarket || "").toString().trim();
   const email = (body.email || "").toString().trim().toLowerCase();
   const track = (body.track || "").toString().trim();
   const source = (body.source || "Polymarket Application").toString().trim();
+  const refCode = (body.refCode || "").toString().trim().toUpperCase();
+  const referredBy = (body.referredBy || "").toString().trim().toUpperCase();
 
   if (name.length < 2 || !EMAIL_RE.test(email)) {
     return respond_({ status: "error", message: "Missing or invalid name/email." });
@@ -53,8 +70,28 @@ function doPost(e) {
   }
 
   const appId = generateAppId_();
-  sheet.appendRow([new Date(), name, username, email, track, source, appId]);
+  sheet.appendRow([new Date(), name, xHandle, email, track, source, appId, telegram, polymarket, refCode, referredBy]);
   return respond_({ status: "confirmed", appId: appId, telegramLink: TELEGRAM_LINK });
+}
+
+/**
+ * GET ?code=REFCODE — used by the "invite a friend" step to check
+ * whether anyone has submitted the application form with this referral
+ * code, i.e. whether the applicant's invite link actually got used.
+ */
+function doGet(e) {
+  const code = (((e && e.parameter) || {}).code || "").toString().trim().toUpperCase();
+  if (!code) {
+    return respond_({ used: false, count: 0 });
+  }
+  const sheet = getSheet_();
+  const values = sheet.getDataRange().getValues();
+  let count = 0;
+  for (let i = 1; i < values.length; i++) {
+    const referredBy = (values[i][10] || "").toString().trim().toUpperCase();
+    if (referredBy && referredBy === code) count++;
+  }
+  return respond_({ used: count > 0, count: count });
 }
 
 function getSheet_() {
@@ -62,9 +99,16 @@ function getSheet_() {
   let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAME);
-    sheet.appendRow(["Timestamp", "Name", "Username", "Email", "Track", "Source", "Application ID"]);
   }
+  ensureHeaders_(sheet);
   return sheet;
+}
+
+function ensureHeaders_(sheet) {
+  const lastCol = sheet.getLastColumn();
+  if (lastCol < HEADERS.length) {
+    sheet.getRange(1, lastCol + 1, 1, HEADERS.length - lastCol).setValues([HEADERS.slice(lastCol)]);
+  }
 }
 
 function findByEmail_(sheet, email) {

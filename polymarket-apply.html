@@ -132,6 +132,10 @@
   .btn:focus-visible{outline:2px solid var(--green-bright);outline-offset:2px}
   .btn-open{background:var(--green);color:#04210a}
   .btn-open:hover{filter:brightness(1.08)}
+  .btn-confirm{background:transparent;border:1px solid var(--line);color:var(--green-bright)}
+  .btn-confirm:hover{background:rgba(95,224,0,.08)}
+  .btn-confirm.hidden{display:none}
+  .btn-confirm[disabled]{opacity:.55;cursor:default}
   .task.done{border-color:var(--line);background:rgba(95,224,0,.05)}
   .task.done .ic{background:rgba(95,224,0,.16)}
   .check{margin-left:auto;width:26px;height:26px;border-radius:50%;flex:none;
@@ -148,6 +152,14 @@
     letter-spacing:.05em;display:none}
   .task.done .done-pill{display:inline}
   .task.done .actions .btn{display:none}
+  .ref-box{display:flex;align-items:center;gap:8px;margin-top:10px;padding:8px 10px;
+    background:rgba(0,0,0,.25);border:1px solid var(--line-soft);border-radius:9px}
+  .ref-box .ref-link{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-family:"Space Mono";font-size:10.5px;color:#dae4d9}
+  .ref-box .ref-copy{flex:none;background:transparent;border:1px solid var(--line);color:var(--green-bright);
+    font-family:"Inter";font-size:11px;font-weight:600;padding:5px 9px;border-radius:7px;cursor:pointer}
+  .ref-box .ref-copy:hover{background:rgba(95,224,0,.08)}
+  .task.done .ref-box{display:none}
 
   /* ---------- submit gate ---------- */
   .gate{margin-top:26px;position:relative}
@@ -302,7 +314,9 @@
       <p class="sub" id="resSub">Enter your details below. We'll follow up by email with everything you need for class.</p>
       <div class="form">
         <input id="fName" type="text" placeholder="Your name" autocomplete="name" />
-        <input id="fUser" type="text" placeholder="Your @username (X or Telegram)" autocomplete="username" />
+        <input id="fXHandle" type="text" placeholder="Your X handle (e.g. @yourname)" autocomplete="off" />
+        <input id="fTelegram" type="text" placeholder="Your Telegram username (e.g. @yourname)" autocomplete="off" />
+        <input id="fPolymarket" type="text" placeholder="Your Polymarket username or profile URL" autocomplete="off" />
         <input id="fEmail" type="email" placeholder="Your email address" autocomplete="email" inputmode="email" />
         <div class="err" id="formErr"></div>
         <button class="join" id="joinBtn">
@@ -358,18 +372,40 @@ const TASKS = [
   { id:"x", icon:icoX(), title:"Follow us on X", desc:"Get class updates & live trade breakdowns.", cta:"Follow @MustardAcademy_", link:CONFIG.links.x },
   { id:"wa", icon:icoWA(), title:"Join the WhatsApp community", desc:"Our open community for announcements & reminders.", cta:"Join community", link:CONFIG.links.whatsapp },
   { id:"pm", icon:icoPM(), title:"Open a Polymarket account", desc:"You'll trade live in class — set it up first.", cta:"Open Polymarket", link:CONFIG.links.polymarket },
-  { id:"share", icon:icoShare(), title:"Invite a friend", desc:"Minimum of 1 referral needed to be verified for the class.", cta:"Share the class", link:"share" }
+  { id:"share", icon:icoShare(), title:"Invite a friend", desc:"Minimum of 1 referral needed to be verified for the class.", cta:"Share my link", link:"share" }
 ];
 
 /* ---------- state ---------- */
 const done = new Set();
 const total = TASKS.length;
 
+/* ---------- referral code — real verification for the "invite a friend" step ---------- */
+const REF_STORAGE_KEY = "ma_pm_ref_code";
+function genRefCode(){
+  return (Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-2)).toUpperCase();
+}
+let myRefCode = "";
+try { myRefCode = localStorage.getItem(REF_STORAGE_KEY) || ""; } catch(e){}
+if (!myRefCode){
+  myRefCode = genRefCode();
+  try { localStorage.setItem(REF_STORAGE_KEY, myRefCode); } catch(e){}
+}
+const referredByCode = (new URLSearchParams(location.search).get("ref") || "").trim().toUpperCase();
+const referralLink = location.origin + location.pathname + "?ref=" + myRefCode;
+
+async function checkReferralUsed(){
+  const url = CONFIG.endpoint + (CONFIG.endpoint.includes("?") ? "&" : "?") + "code=" + encodeURIComponent(myRefCode);
+  const res = await fetch(url);
+  const data = await res.json();
+  return !!(data && data.used);
+}
+
 /* ---------- render tasks ---------- */
 const listEl = document.getElementById("taskList");
 document.getElementById("totalCount").textContent = total;
 
 TASKS.forEach((t, i) => {
+  const isShare = t.id === "share";
   const el = document.createElement("div");
   el.className = "task";
   el.id = "task-" + t.id;
@@ -379,11 +415,16 @@ TASKS.forEach((t, i) => {
     <div class="body">
       <h3>${t.title}</h3>
       <p>${t.desc}</p>
+      ${isShare ? `<div class="ref-box"><span class="ref-link">${referralLink}</span><button type="button" class="ref-copy">Copy</button></div>` : ""}
       <div class="actions">
         <button class="btn btn-open">${t.cta}
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#04210a" stroke-width="2.4" stroke-linecap="round"><path d="M7 17 17 7M9 7h8v8"/></svg>
         </button>
-        <span class="checking-pill"><span class="spin3"></span> Marking complete…</span>
+        ${isShare
+          ? `<span class="checking-pill ref-wait"><span class="spin3"></span> Waiting for a referral…</span>
+             <button type="button" class="btn btn-confirm ref-recheck hidden">Check now</button>`
+          : `<span class="checking-pill"><span class="spin3"></span> Marking complete…</span>`
+        }
         <span class="done-pill">Completed</span>
       </div>
     </div>
@@ -392,16 +433,48 @@ TASKS.forEach((t, i) => {
   const openBtn = el.querySelector(".btn-open");
   const checkingEl = el.querySelector(".checking-pill");
 
-  openBtn.addEventListener("click", () => {
-    if (t.link === "share") { doShare(); }
-    else { window.open(t.link, "_blank", "noopener"); }
-    openBtn.style.display = "none";
-    checkingEl.classList.add("show");
-    setTimeout(() => {
-      checkingEl.classList.remove("show");
-      complete(t.id, el);
-    }, 900);
-  });
+  if (isShare){
+    const recheckBtn = el.querySelector(".ref-recheck");
+    const copyBtn = el.querySelector(".ref-copy");
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard?.writeText(referralLink).then(() => {
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
+      }).catch(() => {});
+    });
+    async function runCheck(){
+      recheckBtn.disabled = true;
+      try{
+        const used = await checkReferralUsed();
+        if (used){
+          checkingEl.classList.remove("show");
+          recheckBtn.classList.add("hidden");
+          complete(t.id, el);
+        }
+      }catch(e){ /* offline or endpoint unreachable — user can retry */ }
+      finally{ recheckBtn.disabled = false; }
+    }
+    openBtn.addEventListener("click", () => {
+      doShare(referralLink);
+      openBtn.style.display = "none";
+      checkingEl.classList.add("show");
+      recheckBtn.classList.remove("hidden");
+      runCheck();
+    });
+    recheckBtn.addEventListener("click", runCheck);
+    // Silently check once on load in case a friend already applied on a previous visit.
+    checkReferralUsed().then(used => { if (used) complete(t.id, el); }).catch(() => {});
+  } else {
+    openBtn.addEventListener("click", () => {
+      window.open(t.link, "_blank", "noopener");
+      openBtn.style.display = "none";
+      checkingEl.classList.add("show");
+      setTimeout(() => {
+        checkingEl.classList.remove("show");
+        complete(t.id, el);
+      }, 900);
+    });
+  }
 
   listEl.appendChild(el);
 });
@@ -516,7 +589,9 @@ joinBtn.addEventListener("click", submitApplication);
 
 async function submitApplication(){
   const name = document.getElementById("fName").value.trim();
-  const username = document.getElementById("fUser").value.trim();
+  const xHandle = document.getElementById("fXHandle").value.trim();
+  const telegram = document.getElementById("fTelegram").value.trim();
+  const polymarket = document.getElementById("fPolymarket").value.trim();
   const email = document.getElementById("fEmail").value.trim();
   const err = document.getElementById("formErr");
   resultEl.className = "result";
@@ -524,9 +599,11 @@ async function submitApplication(){
   if (!EMAIL_RE.test(email)){ err.textContent = "Please enter a valid email address."; return; }
   err.textContent = "";
 
+  const payload = { name, xHandle, telegram, polymarket, email, source: "Polymarket Application", refCode: myRefCode, referredBy: referredByCode };
+
   if (!CONFIG.endpoint || CONFIG.endpoint.includes("REPLACE")){
     // No backend configured yet → forward the details by WhatsApp so the page still works.
-    const msg = `Hi Mustard Academy! I completed the checklist for the *Introduction to Polymarket* class.%0A%0AName: ${encodeURIComponent(name)}%0AUsername: ${encodeURIComponent(username||"-")}%0AEmail: ${encodeURIComponent(email)}`;
+    const msg = `Hi Mustard Academy! I completed the checklist for the *Introduction to Polymarket* class.%0A%0AName: ${encodeURIComponent(name)}%0AX: ${encodeURIComponent(xHandle||"-")}%0ATelegram: ${encodeURIComponent(telegram||"-")}%0APolymarket: ${encodeURIComponent(polymarket||"-")}%0AEmail: ${encodeURIComponent(email)}`;
     window.open(`https://wa.me/${CONFIG.adminWhatsApp}?text=${msg}`, "_blank", "noopener");
     handleResponse({ status:"confirmed", telegramLink: CONFIG.telegramLink });
     return;
@@ -538,7 +615,7 @@ async function submitApplication(){
     const res = await fetch(CONFIG.endpoint, {
       method:"POST",
       headers:{ "Content-Type":"text/plain;charset=utf-8" }, // text/plain avoids a CORS preflight to Apps Script
-      body: JSON.stringify({ name, username, email, source: "Polymarket Application" })
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
     handleResponse(data);
@@ -580,7 +657,7 @@ function handleResponse(data){
 }
 
 function hideForm(){
-  ["fName","fUser","fEmail","formErr"].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display="none"; });
+  ["fName","fXHandle","fTelegram","fPolymarket","fEmail","formErr"].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display="none"; });
   joinBtn.style.display="none";
 }
 
@@ -596,9 +673,9 @@ function setLoading(on){
 }
 
 /* ---------- share ---------- */
-function doShare(){
+function doShare(link){
   const data = { title:"Introduction to Polymarket — Mustard Academy",
-    text:"Learn to trade, predict & profit on Polymarket. Free live class 👇", url: location.href };
+    text:"Learn to trade, predict & profit on Polymarket. Free live class 👇", url: link || location.href };
   const openWa = () => {
     const wa = `https://wa.me/?text=${encodeURIComponent(data.text+" "+data.url)}`;
     window.open(wa, "_blank", "noopener");
