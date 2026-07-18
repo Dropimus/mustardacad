@@ -501,22 +501,29 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /* ---------- progress chart — driven entirely by real checklist state ---------- */
 const cv  = document.getElementById("chart");
 const ctx = cv.getContext("2d");
+const yaxisEls = Array.from(document.querySelectorAll(".yaxis span"));
 let series = [0, 0];
 const MAXPTS = 60;
 const clamp = (x,a,b)=>Math.max(a,Math.min(b,x));
 
 /* targetLevel = real progress from completed tasks (what the % readout shows).
-   liveLevel   = what's actually drawn — a gentle random walk that keeps the
-   chart breathing on its own, always pulled back toward targetLevel so it
-   still reads as "your progress" and never wanders off unrelated to it. */
+   liveLevel   = what's actually drawn — idles as a tight ripple around
+   targetLevel (like a quiet order book), so it never sits dead flat.
+   A completed task fires a "buy" pump: liveLevel sprints past the new
+   target, hangs there a beat, then eases back down to settle on it —
+   like a big buy sweeping the book before the price cools off. */
 let targetLevel = 0;
 let liveLevel = 0;
-let boostUntil = 0;
-const BAND = 6;           // max drift distance from targetLevel
-const NOISE = 1.6;        // per-tick jitter strength — keeps it visibly moving every tick
-const REVERT_SLOW = 0.12; // idle pull-back toward targetLevel
-const REVERT_FAST = 0.35; // pull-back right after a task completes
-const PUSH_MS = 200;      // cadence of new points (scroll speed)
+let pumpPeak = null;        // overshoot level while a pump is in flight
+let pumpUntil = 0;          // end of the sprint-to-peak phase
+let settleUntil = 0;        // end of the ease-back-down phase
+const BAND = 2;             // max drift distance from the active target
+const NOISE = 0.85;         // per-tick idle jitter — small, but always moving
+const PUMP_NOISE = 1.8;     // extra jitter while a pump is in flight
+const REVERT_IDLE = 0.15;   // idle pull-back toward targetLevel
+const REVERT_PUMP = 0.5;    // sprint speed up to the pump peak
+const REVERT_SETTLE = 0.18; // ease-back speed from peak down to targetLevel
+const PUSH_MS = 200;        // cadence of new points (scroll speed)
 
 function pushVal(v){
   series.push(clamp(v,0,100));
@@ -525,8 +532,18 @@ function pushVal(v){
   draw();
 }
 function animateTo(newTarget){
+  const prevTarget = targetLevel;
   targetLevel = clamp(newTarget,0,100);
-  boostUntil = performance.now() + 650;
+  const gain = targetLevel - prevTarget;
+  const now = performance.now();
+  if (gain > 0.4 && !reduceMotion){
+    const overshoot = clamp(gain*0.4, 2, 10);
+    pumpPeak = clamp(targetLevel + overshoot, 0, 100);
+    pumpUntil = now + 550;
+    settleUntil = now + 1500;
+  } else {
+    pumpPeak = null;
+  }
   if (reduceMotion){ liveLevel = targetLevel; pushVal(liveLevel); }
 }
 
@@ -535,9 +552,15 @@ function liveTick(now){
   if (!lastPush) lastPush = now;
   if (now - lastPush >= PUSH_MS){
     lastPush = now;
-    const revert = now < boostUntil ? REVERT_FAST : REVERT_SLOW;
-    liveLevel += (targetLevel - liveLevel) * revert + (Math.random()-0.5) * NOISE;
-    const lo = Math.max(0, targetLevel - BAND), hi = Math.min(100, targetLevel + BAND);
+    let effTarget = targetLevel, revert = REVERT_IDLE, noiseAmt = NOISE;
+    if (pumpPeak !== null){
+      if (now < pumpUntil){ effTarget = pumpPeak; revert = REVERT_PUMP; noiseAmt = PUMP_NOISE; }
+      else if (now < settleUntil){ effTarget = targetLevel; revert = REVERT_SETTLE; noiseAmt = PUMP_NOISE*0.7; }
+      else { pumpPeak = null; }
+    }
+    liveLevel += (effTarget - liveLevel) * revert + (Math.random()-0.5) * noiseAmt;
+    const lo = Math.max(0, Math.min(targetLevel, effTarget) - BAND);
+    const hi = Math.min(100, Math.max(targetLevel, effTarget) + BAND);
     liveLevel = clamp(liveLevel, lo, hi);
     pushVal(liveLevel);
   }
@@ -545,7 +568,31 @@ function liveTick(now){
 }
 if (!reduceMotion) requestAnimationFrame(liveTick);
 
+/* the y-axis autoscales to whatever range is actually on screen, so a
+   0–1% idle ripple fills the chart just as visibly as a big pump does —
+   it eases toward the new range instead of snapping, so rescales read
+   as a smooth zoom rather than a jump cut. */
+let axisMin = null, axisMax = null;
+function updateAxis(){
+  const lo = Math.min(...series), hi = Math.max(...series);
+  const pad = Math.max((hi-lo)*0.25, 1.2);
+  let wantMax = Math.min(100, hi+pad), wantMin = Math.max(0, lo-pad);
+  const minRange = 3;
+  if (wantMax - wantMin < minRange){
+    const mid = (wantMax+wantMin)/2;
+    wantMin = Math.max(0, mid - minRange/2);
+    wantMax = wantMin + minRange;
+  }
+  if (axisMax === null){ axisMax = wantMax; axisMin = wantMin; }
+  else { axisMax += (wantMax-axisMax)*0.15; axisMin += (wantMin-axisMin)*0.15; }
+
+  const fmt = v => (axisMax-axisMin < 5) ? v.toFixed(1) : String(Math.round(v));
+  const step = (axisMax-axisMin)/4;
+  yaxisEls.forEach((el,i) => { el.textContent = fmt(axisMax - i*step); });
+}
+
 function draw(){
+  updateAxis();
   const dpr = window.devicePixelRatio || 1;
   const w = cv.clientWidth || 300, h = cv.clientHeight || 150;
   if (cv.width !== Math.round(w*dpr) || cv.height !== Math.round(h*dpr)){ cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr); }
@@ -553,11 +600,12 @@ function draw(){
   ctx.clearRect(0,0,w,h);
   const padT=10, padB=8, padR=30;
   const plotW = w - padR, plotH = h - padT - padB, n = series.length;
+  const range = Math.max(axisMax-axisMin, 0.0001);
   const xAt = i => n<=1?0:(i/(n-1))*plotW;
-  const yAt = v => padT + (1 - v/100)*plotH;
+  const yAt = v => padT + (1 - (v-axisMin)/range)*plotH;
 
   ctx.strokeStyle="rgba(255,255,255,.05)"; ctx.lineWidth=1;
-  [0,25,50,75,100].forEach(g=>{ const y=yAt(g); ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(plotW,y); ctx.stroke(); });
+  for(let i=0;i<=4;i++){ const y=padT + (i/4)*plotH; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(plotW,y); ctx.stroke(); }
 
   ctx.beginPath(); ctx.moveTo(xAt(0),yAt(series[0]));
   for(let i=1;i<n;i++) ctx.lineTo(xAt(i),yAt(series[i]));
