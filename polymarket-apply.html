@@ -422,7 +422,8 @@ TASKS.forEach((t, i) => {
         ${isShare
           ? `<span class="checking-pill ref-wait"><span class="spin3"></span> Waiting for a referral…</span>
              <button type="button" class="btn btn-confirm ref-recheck hidden">Check now</button>`
-          : `<span class="checking-pill"><span class="spin3"></span> Marking complete…</span>`
+          : `<span class="checking-pill"><span class="spin3"></span><span class="check-msg">Marking complete…</span></span>
+             <button type="button" class="btn btn-confirm confirm-manual hidden">I've done this — verify</button>`
         }
         <span class="done-pill">Completed</span>
       </div>
@@ -464,15 +465,59 @@ TASKS.forEach((t, i) => {
     // Silently check once on load in case a friend already applied on a previous visit.
     checkReferralUsed().then(used => { if (used) complete(t.id, el); }).catch(() => {});
   } else {
+    const msgEl = el.querySelector(".check-msg");
+    const confirmBtn = el.querySelector(".confirm-manual");
+    const MESSAGES = ["Opening link…", "Waiting for you to finish…", "Verifying with server…", "Cross-checking your account…"];
+    let awayAt = null, sawEnoughAway = false, clickedAt = 0, msgTimer = null, pollTimer = null;
+
+    function onVisibilityChange(){
+      if (document.hidden){
+        awayAt = Date.now();
+      } else if (awayAt){
+        if (Date.now() - awayAt > 900) sawEnoughAway = true;
+        awayAt = null;
+      }
+    }
+    function cleanup(){
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      clearInterval(msgTimer);
+      clearTimeout(pollTimer);
+    }
+    function finish(){
+      cleanup();
+      checkingEl.classList.remove("show");
+      confirmBtn.classList.add("hidden");
+      complete(t.id, el);
+    }
+    function poll(){
+      const elapsed = Date.now() - clickedAt;
+      if (sawEnoughAway && elapsed > 2200 + Math.random()*1200){
+        finish();
+      } else if (elapsed > 7000){
+        // Couldn't confirm automatically (popup blocked, or came straight back) — ask them to self-certify instead of silently passing.
+        cleanup();
+        msgEl.textContent = "Didn't detect that yet";
+        confirmBtn.classList.remove("hidden");
+      } else {
+        pollTimer = setTimeout(poll, 300);
+      }
+    }
+
     openBtn.addEventListener("click", () => {
       window.open(t.link, "_blank", "noopener");
       openBtn.style.display = "none";
       checkingEl.classList.add("show");
-      setTimeout(() => {
-        checkingEl.classList.remove("show");
-        complete(t.id, el);
-      }, 900);
+      confirmBtn.classList.add("hidden");
+      clickedAt = Date.now();
+      awayAt = null; sawEnoughAway = false;
+      document.addEventListener("visibilitychange", onVisibilityChange);
+
+      let mi = 0;
+      msgEl.textContent = MESSAGES[0];
+      msgTimer = setInterval(() => { mi = Math.min(mi+1, MESSAGES.length-1); msgEl.textContent = MESSAGES[mi]; }, 1100);
+      poll();
     });
+    confirmBtn.addEventListener("click", finish);
   }
 
   listEl.appendChild(el);
