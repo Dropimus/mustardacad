@@ -505,23 +505,45 @@ let series = [0, 0];
 const MAXPTS = 60;
 const clamp = (x,a,b)=>Math.max(a,Math.min(b,x));
 
+/* targetLevel = real progress from completed tasks (what the % readout shows).
+   liveLevel   = what's actually drawn — a gentle random walk that keeps the
+   chart breathing on its own, always pulled back toward targetLevel so it
+   still reads as "your progress" and never wanders off unrelated to it. */
+let targetLevel = 0;
+let liveLevel = 0;
+let boostUntil = 0;
+const BAND = 6;           // max drift distance from targetLevel
+const NOISE = 1.6;        // per-tick jitter strength — keeps it visibly moving every tick
+const REVERT_SLOW = 0.12; // idle pull-back toward targetLevel
+const REVERT_FAST = 0.35; // pull-back right after a task completes
+const PUSH_MS = 200;      // cadence of new points (scroll speed)
+
 function pushVal(v){
   series.push(clamp(v,0,100));
   if (series.length > MAXPTS) series.shift();
-  pctEl.textContent = Math.round(series[series.length-1]) + "%";
+  pctEl.textContent = Math.round(targetLevel) + "%";
   draw();
 }
-function animateTo(newTarget, ms){
-  if (reduceMotion){ pushVal(newTarget); return; }
-  const start = series[series.length-1];
-  const t0 = performance.now();
-  (function frame(now){
-    const p = Math.min((now-t0)/(ms||700), 1);
-    const eased = 1 - Math.pow(1-p, 3);
-    pushVal(start + (newTarget-start)*eased);
-    if (p < 1) requestAnimationFrame(frame);
-  })(t0);
+function animateTo(newTarget){
+  targetLevel = clamp(newTarget,0,100);
+  boostUntil = performance.now() + 650;
+  if (reduceMotion){ liveLevel = targetLevel; pushVal(liveLevel); }
 }
+
+let lastPush = 0;
+function liveTick(now){
+  if (!lastPush) lastPush = now;
+  if (now - lastPush >= PUSH_MS){
+    lastPush = now;
+    const revert = now < boostUntil ? REVERT_FAST : REVERT_SLOW;
+    liveLevel += (targetLevel - liveLevel) * revert + (Math.random()-0.5) * NOISE;
+    const lo = Math.max(0, targetLevel - BAND), hi = Math.min(100, targetLevel + BAND);
+    liveLevel = clamp(liveLevel, lo, hi);
+    pushVal(liveLevel);
+  }
+  requestAnimationFrame(liveTick);
+}
+if (!reduceMotion) requestAnimationFrame(liveTick);
 
 function draw(){
   const dpr = window.devicePixelRatio || 1;
