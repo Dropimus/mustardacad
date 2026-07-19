@@ -543,101 +543,40 @@ const TICK = `<svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linec
 const reduceMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/* ---------- progress chart — driven entirely by real checklist state ---------- */
+/* ---------- Polymarket-style chart engine ---------- */
 const cv  = document.getElementById("chart");
 const ctx = cv.getContext("2d");
-const yaxisEls = Array.from(document.querySelectorAll(".yaxis span"));
-let series = [0, 0];
-const MAXPTS = 60;
+let series = [];
+let target = 7;          // value the line drifts toward
+let phase  = "live";     // live | await | yes | no
+let tickTimer = null;
+let closeIndex = null;
+const MAXPTS = 70;
 const clamp = (x,a,b)=>Math.max(a,Math.min(b,x));
 
-/* targetLevel = real progress from completed tasks (what the % readout shows).
-   liveLevel   = what's actually drawn — idles as a tight ripple around
-   targetLevel (like a quiet order book), so it never sits dead flat.
-   A completed task fires a "buy" pump: liveLevel sprints past the new
-   target, hangs there a beat, then eases back down to settle on it —
-   like a big buy sweeping the book before the price cools off. */
-let targetLevel = 0;
-let liveLevel = 0;
-let pumpPeak = null;        // overshoot level while a pump is in flight
-let pumpUntil = 0;          // end of the sprint-to-peak phase
-let settleUntil = 0;        // end of the ease-back-down phase
-const BAND = 5;             // max drift distance from the active target
-const NOISE = 2.5;          // per-tick idle jitter — big enough to clearly read as motion
-const PUMP_NOISE = 5;       // extra jitter while a pump is in flight
-const REVERT_IDLE = 0.1;    // idle pull-back toward targetLevel
-const REVERT_PUMP = 0.5;    // sprint speed up to the pump peak
-const REVERT_SETTLE = 0.18; // ease-back speed from peak down to targetLevel
-const PUSH_MS = 200;        // cadence of new points (scroll speed)
+(function seed(){
+  let v = 7 + Math.random()*3;
+  for (let i=0;i<24;i++){ v = clamp(v+(Math.random()-0.5)*3, 4, 13); series.push(v); }
+})();
 
 function pushVal(v){
-  series.push(clamp(v,0,100));
-  if (series.length > MAXPTS) series.shift();
-  pctEl.textContent = Math.round(targetLevel) + "%";
+  series.push(clamp(v,1,99.5));
+  if (series.length > MAXPTS){ series.shift(); if(closeIndex!==null){ closeIndex--; if(closeIndex<0) closeIndex=null; } }
+  pctEl.textContent = Math.round(series[series.length-1]) + "%";
   draw();
 }
-function animateTo(newTarget){
-  const prevTarget = targetLevel;
-  targetLevel = clamp(newTarget,0,100);
-  const gain = targetLevel - prevTarget;
-  const now = performance.now();
-  if (gain > 0.4 && !reduceMotion){
-    const overshoot = clamp(gain*0.4, 2, 10);
-    pumpPeak = clamp(targetLevel + overshoot, 0, 100);
-    pumpUntil = now + 550;
-    settleUntil = now + 1500;
-  } else {
-    pumpPeak = null;
-  }
-  if (reduceMotion){ liveLevel = targetLevel; pushVal(liveLevel); }
+function tick(){
+  const prev = series[series.length-1];
+  pushVal(prev + (target-prev)*0.28 + (Math.random()-0.5)*3.0);
 }
+function startTicking(){ if(!tickTimer) tickTimer = setInterval(tick, 140); }
+function stopTicking(){ clearInterval(tickTimer); tickTimer = null; }
 
-let lastPush = 0;
-function liveTick(now){
-  if (!lastPush) lastPush = now;
-  if (now - lastPush >= PUSH_MS){
-    lastPush = now;
-    let effTarget = targetLevel, revert = REVERT_IDLE, noiseAmt = NOISE;
-    if (pumpPeak !== null){
-      if (now < pumpUntil){ effTarget = pumpPeak; revert = REVERT_PUMP; noiseAmt = PUMP_NOISE; }
-      else if (now < settleUntil){ effTarget = targetLevel; revert = REVERT_SETTLE; noiseAmt = PUMP_NOISE*0.7; }
-      else { pumpPeak = null; }
-    }
-    liveLevel += (effTarget - liveLevel) * revert + (Math.random()-0.5) * noiseAmt;
-    const lo = Math.max(0, Math.min(targetLevel, effTarget) - BAND);
-    const hi = Math.min(100, Math.max(targetLevel, effTarget) + BAND);
-    liveLevel = clamp(liveLevel, lo, hi);
-    pushVal(liveLevel);
-  }
-  requestAnimationFrame(liveTick);
+function lineColors(){
+  if (phase==="no") return { line:"#ff5a4d", top:"rgba(255,90,77,.28)", bot:"rgba(255,90,77,0)" };
+  return { line:"#5fe000", top:"rgba(95,224,0,.30)", bot:"rgba(95,224,0,0)" };
 }
-if (!reduceMotion) requestAnimationFrame(liveTick);
-
-/* the y-axis autoscales to whatever range is actually on screen, so a
-   0–1% idle ripple fills the chart just as visibly as a big pump does —
-   it eases toward the new range instead of snapping, so rescales read
-   as a smooth zoom rather than a jump cut. */
-let axisMin = null, axisMax = null;
-function updateAxis(){
-  const lo = Math.min(...series), hi = Math.max(...series);
-  const pad = Math.max((hi-lo)*0.25, 1.2);
-  let wantMax = Math.min(100, hi+pad), wantMin = Math.max(0, lo-pad);
-  const minRange = 3;
-  if (wantMax - wantMin < minRange){
-    const mid = (wantMax+wantMin)/2;
-    wantMin = Math.max(0, mid - minRange/2);
-    wantMax = wantMin + minRange;
-  }
-  if (axisMax === null){ axisMax = wantMax; axisMin = wantMin; }
-  else { axisMax += (wantMax-axisMax)*0.15; axisMin += (wantMin-axisMin)*0.15; }
-
-  const fmt = v => (axisMax-axisMin < 5) ? v.toFixed(1) : String(Math.round(v));
-  const step = (axisMax-axisMin)/4;
-  yaxisEls.forEach((el,i) => { el.textContent = fmt(axisMax - i*step); });
-}
-
 function draw(){
-  updateAxis();
   const dpr = window.devicePixelRatio || 1;
   const w = cv.clientWidth || 300, h = cv.clientHeight || 150;
   if (cv.width !== Math.round(w*dpr) || cv.height !== Math.round(h*dpr)){ cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr); }
@@ -645,31 +584,51 @@ function draw(){
   ctx.clearRect(0,0,w,h);
   const padT=10, padB=8, padR=30;
   const plotW = w - padR, plotH = h - padT - padB, n = series.length;
-  const range = Math.max(axisMax-axisMin, 0.0001);
   const xAt = i => n<=1?0:(i/(n-1))*plotW;
-  const yAt = v => padT + (1 - (v-axisMin)/range)*plotH;
+  const yAt = v => padT + (1 - v/100)*plotH;
 
   ctx.strokeStyle="rgba(255,255,255,.05)"; ctx.lineWidth=1;
-  for(let i=0;i<=4;i++){ const y=padT + (i/4)*plotH; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(plotW,y); ctx.stroke(); }
+  [0,25,50,75,100].forEach(g=>{ const y=yAt(g); ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(plotW,y); ctx.stroke(); });
 
+  const c = lineColors();
   ctx.beginPath(); ctx.moveTo(xAt(0),yAt(series[0]));
   for(let i=1;i<n;i++) ctx.lineTo(xAt(i),yAt(series[i]));
   ctx.lineTo(xAt(n-1),h-padB); ctx.lineTo(xAt(0),h-padB); ctx.closePath();
-  const g=ctx.createLinearGradient(0,padT,0,h); g.addColorStop(0,"rgba(95,224,0,.30)"); g.addColorStop(1,"rgba(95,224,0,0)");
+  const g=ctx.createLinearGradient(0,padT,0,h); g.addColorStop(0,c.top); g.addColorStop(1,c.bot);
   ctx.fillStyle=g; ctx.fill();
 
   ctx.beginPath(); ctx.moveTo(xAt(0),yAt(series[0]));
   for(let i=1;i<n;i++) ctx.lineTo(xAt(i),yAt(series[i]));
-  ctx.strokeStyle="#5fe000"; ctx.lineWidth=2; ctx.lineJoin="round";
-  ctx.shadowColor="#5fe000"; ctx.shadowBlur=8; ctx.stroke(); ctx.shadowBlur=0;
+  ctx.strokeStyle=c.line; ctx.lineWidth=2; ctx.lineJoin="round";
+  ctx.shadowColor=c.line; ctx.shadowBlur=8; ctx.stroke(); ctx.shadowBlur=0;
+
+  if (closeIndex!==null && closeIndex>0){
+    const cx=xAt(closeIndex);
+    ctx.setLineDash([4,4]); ctx.strokeStyle="rgba(255,206,90,.6)"; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(cx,padT); ctx.lineTo(cx,h-padB); ctx.stroke(); ctx.setLineDash([]);
+  }
 
   const ex=xAt(n-1), ey=yAt(series[n-1]);
-  ctx.globalAlpha=.22; ctx.fillStyle="#5fe000"; ctx.beginPath(); ctx.arc(ex,ey,7,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
-  ctx.fillStyle="#5fe000"; ctx.beginPath(); ctx.arc(ex,ey,3.5,0,Math.PI*2); ctx.fill();
+  if (phase==="live"||phase==="await"){ ctx.globalAlpha=.22; ctx.fillStyle=c.line; ctx.beginPath(); ctx.arc(ex,ey,7,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1; }
+  ctx.fillStyle=c.line; ctx.beginPath(); ctx.arc(ex,ey,3.5,0,Math.PI*2); ctx.fill();
   ctx.strokeStyle="#050706"; ctx.lineWidth=1.5; ctx.stroke();
 }
 window.addEventListener("resize", draw);
 draw();
+if (!reduceMotion) startTicking(); else for(let i=0;i<6;i++) pushVal(target);
+
+function resolveChart(yes){
+  phase = yes ? "yes" : "no";
+  stopTicking();
+  target = yes ? 100 : 3;
+  if (reduceMotion){ pushVal(target); pctEl.textContent = Math.round(target)+"%"; return; }
+  let steps=0;
+  const iv = setInterval(()=>{
+    const prev = series[series.length-1];
+    pushVal(prev + (target-prev)*0.5 + (Math.random()-0.5)*1.5);
+    if (++steps>=12){ clearInterval(iv); pushVal(target); pctEl.textContent = Math.round(target)+"%"; }
+  }, 90);
+}
 
 /* ---------- task completion drives the (real) progress bar ---------- */
 function complete(id, el){
@@ -678,7 +637,8 @@ function complete(id, el){
   el.classList.add("done");
   const n = done.size;
   doneCountEl.textContent = n;
-  animateTo((n/total)*100);
+  target = 6 + (n/total)*86;
+  if (reduceMotion){ pushVal(target); pushVal(target); }
   if (n===total){
     statusEl.innerHTML = 'All steps done — <b>submit your details</b> to finish applying.';
     closeBtn.classList.add("show");
@@ -689,6 +649,8 @@ function complete(id, el){
 
 /* ---------- reveal the submission form ---------- */
 closeBtn.addEventListener("click", ()=>{
+  phase = "await"; stopTicking();
+  closeIndex = series.length-1; draw();
   mktPill.className = "mkt-pill await";
   mktPill.innerHTML = '<span class="pdot"></span> Awaiting details';
   statusEl.innerHTML = 'Checklist complete. <b>Submit your details</b> to finish applying.';
@@ -752,7 +714,7 @@ function handleResponse(data){
     : "";
 
   if (status==="confirmed" || status==="duplicate"){
-    animateTo(100, 400);
+    resolveChart(true);
     mktPill.className="mkt-pill done"; mktPill.innerHTML='<span class="pdot"></span> Application received';
     statusEl.innerHTML="Application received — you're on the list.";
     acceptedEl.classList.add("done");
