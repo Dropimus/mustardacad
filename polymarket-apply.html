@@ -313,10 +313,9 @@
       <p class="sub" id="resSub">Enter your details below. We'll follow up by email with everything you need for class.</p>
       <div class="form">
         <input id="fName" type="text" placeholder="Your name" autocomplete="name" />
-        <input id="fXHandle" type="text" placeholder="Your X handle (e.g. @yourname)" autocomplete="off" />
-        <input id="fTelegram" type="text" placeholder="Your Telegram username (e.g. @yourname)" autocomplete="off" />
-        <input id="fPolymarket" type="text" placeholder="Your Polymarket username or profile URL" autocomplete="off" />
         <input id="fEmail" type="email" placeholder="Your email address" autocomplete="email" inputmode="email" />
+        <input id="fWhatsApp" type="tel" placeholder="Your WhatsApp number (e.g. +234 916 636 4831)" autocomplete="tel" inputmode="tel" />
+        <input id="fXHandle" type="text" placeholder="Your X (Twitter) username (e.g. @yourname)" autocomplete="off" />
         <div class="err" id="formErr"></div>
         <button class="join" id="joinBtn">
           <span class="lbl">Submit application</span>
@@ -665,21 +664,21 @@ joinBtn.addEventListener("click", submitApplication);
 
 async function submitApplication(){
   const name = document.getElementById("fName").value.trim();
-  const xHandle = document.getElementById("fXHandle").value.trim();
-  const telegram = document.getElementById("fTelegram").value.trim();
-  const polymarket = document.getElementById("fPolymarket").value.trim();
   const email = document.getElementById("fEmail").value.trim();
+  const whatsapp = document.getElementById("fWhatsApp").value.trim();
+  const xHandle = document.getElementById("fXHandle").value.trim();
   const err = document.getElementById("formErr");
   resultEl.className = "result";
   if (name.length < 2){ err.textContent = "Please enter your name."; return; }
   if (!EMAIL_RE.test(email)){ err.textContent = "Please enter a valid email address."; return; }
+  if (whatsapp.replace(/\D/g,"").length < 7){ err.textContent = "Please enter a valid WhatsApp number."; return; }
   err.textContent = "";
 
-  const payload = { name, xHandle, telegram, polymarket, email, source: "Polymarket Application", refCode: myRefCode, referredBy: referredByCode };
+  const payload = { name, email, whatsapp, xHandle, source: "Polymarket Application", refCode: myRefCode, referredBy: referredByCode };
 
   if (!CONFIG.endpoint || CONFIG.endpoint.includes("REPLACE")){
     // No backend configured yet → forward the details by WhatsApp so the page still works.
-    const msg = `Hi Mustard Academy! I completed the checklist for the *Introduction to Polymarket* class.%0A%0AName: ${encodeURIComponent(name)}%0AX: ${encodeURIComponent(xHandle||"-")}%0ATelegram: ${encodeURIComponent(telegram||"-")}%0APolymarket: ${encodeURIComponent(polymarket||"-")}%0AEmail: ${encodeURIComponent(email)}`;
+    const msg = `Hi Mustard Academy! I completed the checklist for the *Introduction to Polymarket* class.%0A%0AName: ${encodeURIComponent(name)}%0AEmail: ${encodeURIComponent(email)}%0AWhatsApp: ${encodeURIComponent(whatsapp)}%0AX: ${encodeURIComponent(xHandle||"-")}`;
     window.open(`https://wa.me/${CONFIG.adminWhatsApp}?text=${msg}`, "_blank", "noopener");
     handleResponse({ status:"confirmed", telegramLink: CONFIG.telegramLink });
     return;
@@ -733,7 +732,7 @@ function handleResponse(data){
 }
 
 function hideForm(){
-  ["fName","fXHandle","fTelegram","fPolymarket","fEmail","formErr"].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display="none"; });
+  ["fName","fEmail","fWhatsApp","fXHandle","formErr"].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display="none"; });
   joinBtn.style.display="none";
 }
 

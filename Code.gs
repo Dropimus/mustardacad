@@ -30,16 +30,17 @@
  * time it runs (and tops up the header row on an existing sheet), with
  * header row:
  *   Timestamp | Name | Username | Email | Track | Source |
- *   Application ID | Telegram | Polymarket | Referral Code | Referred By
+ *   Application ID | Telegram | Polymarket | Referral Code | Referred By |
+ *   WhatsApp
  *
- * New columns are appended after the original seven so existing rows
- * from before this change stay aligned.
+ * New columns are appended after the original columns so existing rows
+ * from before each change stay aligned.
  */
 
 const SHEET_NAME = "Applications";
 const TELEGRAM_LINK = "https://t.me/MustardAcademy";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const HEADERS = ["Timestamp", "Name", "Username", "Email", "Track", "Source", "Application ID", "Telegram", "Polymarket", "Referral Code", "Referred By"];
+const HEADERS = ["Timestamp", "Name", "Username", "Email", "Track", "Source", "Application ID", "Telegram", "Polymarket", "Referral Code", "Referred By", "WhatsApp"];
 
 function doPost(e) {
   let body;
@@ -53,6 +54,7 @@ function doPost(e) {
   const xHandle = (body.xHandle || body.username || "").toString().trim();
   const telegram = (body.telegram || "").toString().trim();
   const polymarket = (body.polymarket || "").toString().trim();
+  const whatsapp = (body.whatsapp || "").toString().trim();
   const email = (body.email || "").toString().trim().toLowerCase();
   const track = (body.track || "").toString().trim();
   const source = (body.source || "Polymarket Application").toString().trim();
@@ -70,7 +72,7 @@ function doPost(e) {
   }
 
   const appId = generateAppId_();
-  sheet.appendRow([new Date(), name, xHandle, email, track, source, appId, telegram, polymarket, refCode, referredBy]);
+  sheet.appendRow([new Date(), name, xHandle, email, track, source, appId, telegram, polymarket, refCode, referredBy, whatsapp]);
   return respond_({ status: "confirmed", appId: appId, telegramLink: TELEGRAM_LINK });
 }
 
