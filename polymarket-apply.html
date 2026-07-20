@@ -160,6 +160,12 @@
     font-family:"Inter";font-size:11px;font-weight:600;padding:5px 9px;border-radius:7px;cursor:pointer}
   .ref-box .ref-copy:hover{background:rgba(95,224,0,.08)}
   .task.done .ref-box{display:none}
+  .task-field{width:100%;font-family:"Inter";font-size:13.5px;color:var(--white);
+    background:rgba(0,0,0,.35);border:1px solid var(--line-soft);border-radius:9px;
+    padding:9px 11px;margin-top:9px;transition:border-color .2s}
+  .task-field::placeholder{color:var(--muted-2)}
+  .task-field:focus{outline:none;border-color:var(--green)}
+  .task.done .task-field{opacity:.6}
 
   /* ---------- submit gate ---------- */
   .gate{margin-top:26px;position:relative}
@@ -314,8 +320,6 @@
       <div class="form">
         <input id="fName" type="text" placeholder="Your name" autocomplete="name" />
         <input id="fEmail" type="email" placeholder="Your email address" autocomplete="email" inputmode="email" />
-        <input id="fWhatsApp" type="tel" placeholder="Your WhatsApp number (e.g. +234 916 636 4831)" autocomplete="tel" inputmode="tel" />
-        <input id="fXHandle" type="text" placeholder="Your X (Twitter) username (e.g. @yourname)" autocomplete="off" />
         <div class="err" id="formErr"></div>
         <button class="join" id="joinBtn">
           <span class="lbl">Submit application</span>
@@ -367,8 +371,10 @@ const CONFIG = {
 
 /* Task definitions. Reorder / add / remove freely. */
 const TASKS = [
-  { id:"x", icon:icoX(), title:"Follow us on X", desc:"Get class updates & live trade breakdowns.", cta:"Follow @MustardAcademy_", link:CONFIG.links.x },
-  { id:"wa", icon:icoWA(), title:"Join the WhatsApp community", desc:"Our open community for announcements & reminders.", cta:"Join community", link:CONFIG.links.whatsapp },
+  { id:"x", icon:icoX(), title:"Follow us on X", desc:"Get class updates & live trade breakdowns.", cta:"Follow @MustardAcademy_", link:CONFIG.links.x,
+    captureField:{ type:"text", placeholder:"Your X (Twitter) username (e.g. @yourname)", autocomplete:"off" } },
+  { id:"wa", icon:icoWA(), title:"Join the WhatsApp community", desc:"Our open community for announcements & reminders.", cta:"Join community", link:CONFIG.links.whatsapp,
+    captureField:{ type:"tel", placeholder:"Your WhatsApp number (e.g. +234 916 636 4831)", autocomplete:"tel", inputmode:"tel" } },
   { id:"pm", icon:icoPM(), title:"Open a Polymarket account", desc:"You'll trade live in class — set it up first.", cta:"Open Polymarket", link:CONFIG.links.polymarket },
   { id:"share", icon:icoShare(), title:"Invite a friend", desc:"Minimum of 1 referral needed to be verified for the class.", cta:"Share my link", link:"share" }
 ];
@@ -413,6 +419,7 @@ TASKS.forEach((t, i) => {
     <div class="body">
       <h3>${t.title}</h3>
       <p>${t.desc}</p>
+      ${t.captureField ? `<input type="${t.captureField.type}" class="task-field" id="field-${t.id}" placeholder="${t.captureField.placeholder}" autocomplete="${t.captureField.autocomplete||"off"}"${t.captureField.inputmode ? ` inputmode="${t.captureField.inputmode}"` : ""} />` : ""}
       ${isShare ? `<div class="ref-box"><span class="ref-link">${referralLink}</span><button type="button" class="ref-copy">Copy</button></div>` : ""}
       <div class="actions">
         <button class="btn btn-open">${t.cta}
@@ -466,8 +473,14 @@ TASKS.forEach((t, i) => {
   } else {
     const msgEl = el.querySelector(".check-msg");
     const confirmBtn = el.querySelector(".confirm-manual");
+    const fieldEl = t.captureField ? el.querySelector(".task-field") : null;
     const MESSAGES = ["Opening link…", "Waiting for you to finish…", "Verifying with server…", "Cross-checking your account…"];
     let awayAt = null, sawEnoughAway = false, clickedAt = 0, msgTimer = null, pollTimer = null;
+
+    if (fieldEl){
+      confirmBtn.disabled = !fieldEl.value.trim();
+      fieldEl.addEventListener("input", () => { confirmBtn.disabled = !fieldEl.value.trim(); });
+    }
 
     function onVisibilityChange(){
       if (document.hidden){
@@ -483,6 +496,16 @@ TASKS.forEach((t, i) => {
       clearTimeout(pollTimer);
     }
     function finish(){
+      if (fieldEl && !fieldEl.value.trim()){
+        // Required field still empty — fall back to the manual button, disabled until they fill it in.
+        cleanup();
+        checkingEl.classList.remove("show");
+        msgEl.textContent = "Didn't detect that yet";
+        confirmBtn.classList.remove("hidden");
+        confirmBtn.disabled = true;
+        fieldEl.focus();
+        return;
+      }
       cleanup();
       checkingEl.classList.remove("show");
       confirmBtn.classList.add("hidden");
@@ -497,6 +520,7 @@ TASKS.forEach((t, i) => {
         cleanup();
         msgEl.textContent = "Didn't detect that yet";
         confirmBtn.classList.remove("hidden");
+        if (fieldEl) confirmBtn.disabled = !fieldEl.value.trim();
       } else {
         pollTimer = setTimeout(poll, 300);
       }
@@ -634,6 +658,8 @@ function complete(id, el){
   if (done.has(id)) return;
   done.add(id);
   el.classList.add("done");
+  const fieldEl = el.querySelector(".task-field");
+  if (fieldEl) fieldEl.disabled = true;
   const n = done.size;
   doneCountEl.textContent = n;
   target = 6 + (n/total)*86;
@@ -665,13 +691,12 @@ joinBtn.addEventListener("click", submitApplication);
 async function submitApplication(){
   const name = document.getElementById("fName").value.trim();
   const email = document.getElementById("fEmail").value.trim();
-  const whatsapp = document.getElementById("fWhatsApp").value.trim();
-  const xHandle = document.getElementById("fXHandle").value.trim();
+  const whatsapp = (document.getElementById("field-wa")?.value || "").trim();
+  const xHandle = (document.getElementById("field-x")?.value || "").trim();
   const err = document.getElementById("formErr");
   resultEl.className = "result";
   if (name.length < 2){ err.textContent = "Please enter your name."; return; }
   if (!EMAIL_RE.test(email)){ err.textContent = "Please enter a valid email address."; return; }
-  if (whatsapp.replace(/\D/g,"").length < 7){ err.textContent = "Please enter a valid WhatsApp number."; return; }
   err.textContent = "";
 
   const payload = { name, email, whatsapp, xHandle, source: "Polymarket Application", refCode: myRefCode, referredBy: referredByCode };
@@ -732,7 +757,7 @@ function handleResponse(data){
 }
 
 function hideForm(){
-  ["fName","fEmail","fWhatsApp","fXHandle","formErr"].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display="none"; });
+  ["fName","fEmail","formErr"].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display="none"; });
   joinBtn.style.display="none";
 }
 
