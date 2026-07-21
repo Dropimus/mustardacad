@@ -48,7 +48,10 @@
  * fields, no email dedupe), so it's still checked for the self-referral
  * and code-shape rules above, and lightly de-duped by refCode, but it
  * can't prove the "friend" is a distinct real person any more than the
- * fields above can.
+ * fields above can. De-duping is keyed on the (refCode, referredBy) pair,
+ * not refCode alone — a browser that previously sent a signal for one
+ * referrer (e.g. an earlier test, or a self-referral that got nulled)
+ * must still be able to credit a different, real referrer later.
  *
  * Deploy:
  *   1. Create a Google Sheet (or open an existing one).
@@ -160,8 +163,9 @@ function handleReferralSignal_(body) {
   const values = sheet.getDataRange().getValues();
   for (let i = 1; i < values.length; i++) {
     const existingRefCode = (values[i][1] || "").toString().trim().toUpperCase();
-    if (existingRefCode && existingRefCode === refCode) {
-      return respond_({ status: "ok" }); // already logged for this identity, avoid duplicate rows
+    const existingReferredBy = (values[i][2] || "").toString().trim().toUpperCase();
+    if (existingRefCode === refCode && existingReferredBy === referredBy) {
+      return respond_({ status: "ok" }); // this exact referral pairing is already logged
     }
   }
 
