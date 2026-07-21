@@ -239,7 +239,7 @@ if (!myRefCode){
   myRefCode = genRefCode();
   try { localStorage.setItem(REF_STORAGE_KEY, myRefCode); } catch(e){}
 }
-const myReferralLink = location.origin + location.pathname.replace(/referral-leaderboard\.html$/, "") + "polymarket-apply.html?ref=" + myRefCode;
+const myReferralLink = location.origin + location.pathname.replace(/[^\/]*$/, "") + "polymarket-apply.html?ref=" + myRefCode;
 document.getElementById("meLink").textContent = myReferralLink;
 
 document.getElementById("meCopy").addEventListener("click", () => {
