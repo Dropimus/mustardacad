@@ -31,6 +31,25 @@
  * that would need real identity/email verification — it only closes the
  * "open your own link and resubmit" and "call the API directly" gaps.
  *
+ * Referral signals (breaking the chicken-and-egg problem): the "Invite a
+ * friend" checklist step is required to unlock submission, but the full
+ * application form (name + email) is only shown after *all* checklist
+ * steps — including "Invite a friend" — are done. If crediting a
+ * referral required the friend to fully submit, nobody could ever be
+ * first: submitting requires your own referral to be done, which
+ * requires someone else to submit, which requires their own referral to
+ * be done, forever. To break that, a referral is credited as soon as the
+ * referred visitor fills in their X handle and WhatsApp number — the
+ * first two checklist steps, which every visitor completes regardless of
+ * referrals — via a lightweight "referralSignal" POST (see doPost),
+ * logged to a separate "ReferralSignals" sheet rather than the main
+ * Applications sheet, since no name/email exists yet at that point. This
+ * is a materially weaker signal than a real submission (just two text
+ * fields, no email dedupe), so it's still checked for the self-referral
+ * and code-shape rules above, and lightly de-duped by refCode, but it
+ * can't prove the "friend" is a distinct real person any more than the
+ * fields above can.
+ *
  * Deploy:
  *   1. Create a Google Sheet (or open an existing one).
  *   2. Extensions -> Apps Script, delete the placeholder code, paste this file.
@@ -52,12 +71,14 @@
  */
 
 const SHEET_NAME = "Applications";
+const PENDING_SHEET_NAME = "ReferralSignals";
 const TELEGRAM_LINK = "https://t.me/MustardAcademy";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Matches what genRefCode() in the front-end actually produces (base-36 chars,
 // uppercased). Anything outside this shape is treated as not a real code.
 const CODE_RE = /^[A-Z0-9]{4,12}$/;
 const HEADERS = ["Timestamp", "Name", "Username", "Email", "Track", "Source", "Application ID", "Telegram", "Polymarket", "Referral Code", "Referred By", "WhatsApp"];
+const PENDING_HEADERS = ["Timestamp", "Ref Code", "Referred By", "X Handle", "WhatsApp"];
 
 function doPost(e) {
   let body;
@@ -65,6 +86,10 @@ function doPost(e) {
     body = JSON.parse(e.postData.contents);
   } catch (err) {
     return respond_({ status: "error", message: "Invalid request." });
+  }
+
+  if ((body.action || "").toString().trim() === "referralSignal") {
+    return handleReferralSignal_(body);
   }
 
   const name = (body.name || "").toString().trim();
@@ -112,22 +137,63 @@ function doPost(e) {
 }
 
 /**
+ * POST {action:"referralSignal", refCode, referredBy, xHandle, whatsapp} —
+ * sent as soon as a visitor fills in their X handle and WhatsApp number,
+ * rather than waiting for them to finish their whole application. Logged
+ * to a separate sheet since there's no name/email yet. See the file-level
+ * comment on "referral signals" for why this exists.
+ */
+function handleReferralSignal_(body) {
+  const refCode = normalizeCode_(body.refCode);
+  let referredBy = normalizeCode_(body.referredBy);
+  const xHandle = (body.xHandle || "").toString().trim();
+  const whatsapp = (body.whatsapp || "").toString().trim();
+
+  if (referredBy && referredBy === refCode) {
+    referredBy = "";
+  }
+  if (!referredBy || xHandle.length < 2 || whatsapp.replace(/\D/g, "").length < 7) {
+    return respond_({ status: "ignored" });
+  }
+
+  const sheet = getPendingSheet_();
+  const values = sheet.getDataRange().getValues();
+  for (let i = 1; i < values.length; i++) {
+    const existingRefCode = (values[i][1] || "").toString().trim().toUpperCase();
+    if (existingRefCode && existingRefCode === refCode) {
+      return respond_({ status: "ok" }); // already logged for this identity, avoid duplicate rows
+    }
+  }
+
+  sheet.appendRow([new Date(), refCode, referredBy, xHandle, whatsapp]);
+  return respond_({ status: "ok" });
+}
+
+/**
  * GET ?code=REFCODE — used by the "invite a friend" step to check
- * whether anyone has submitted the application form with this referral
- * code, i.e. whether the applicant's invite link actually got used.
+ * whether anyone has referred by this code, either by fully submitting
+ * an application or by sending a referral signal (see above).
  */
 function doGet(e) {
   const code = normalizeCode_(((e && e.parameter) || {}).code);
   if (!code) {
     return respond_({ used: false, count: 0 });
   }
-  const sheet = getSheet_();
-  const values = sheet.getDataRange().getValues();
+
   let count = 0;
-  for (let i = 1; i < values.length; i++) {
-    const referredBy = (values[i][10] || "").toString().trim().toUpperCase();
+
+  const appValues = getSheet_().getDataRange().getValues();
+  for (let i = 1; i < appValues.length; i++) {
+    const referredBy = (appValues[i][10] || "").toString().trim().toUpperCase();
     if (referredBy && referredBy === code) count++;
   }
+
+  const pendingValues = getPendingSheet_().getDataRange().getValues();
+  for (let i = 1; i < pendingValues.length; i++) {
+    const referredBy = (pendingValues[i][2] || "").toString().trim().toUpperCase();
+    if (referredBy && referredBy === code) count++;
+  }
+
   return respond_({ used: count > 0, count: count });
 }
 
@@ -142,14 +208,24 @@ function getSheet_() {
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAME);
   }
-  ensureHeaders_(sheet);
+  ensureHeaders_(sheet, HEADERS);
   return sheet;
 }
 
-function ensureHeaders_(sheet) {
+function getPendingSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(PENDING_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(PENDING_SHEET_NAME);
+  }
+  ensureHeaders_(sheet, PENDING_HEADERS);
+  return sheet;
+}
+
+function ensureHeaders_(sheet, headers) {
   const lastCol = sheet.getLastColumn();
-  if (lastCol < HEADERS.length) {
-    sheet.getRange(1, lastCol + 1, 1, HEADERS.length - lastCol).setValues([HEADERS.slice(lastCol)]);
+  if (lastCol < headers.length) {
+    sheet.getRange(1, lastCol + 1, 1, headers.length - lastCol).setValues([headers.slice(lastCol)]);
   }
 }
 

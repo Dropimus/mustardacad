@@ -406,6 +406,28 @@ async function checkReferralUsed(){
   return !!(data && data.used);
 }
 
+/* Credits whoever referred this visitor as soon as X + WhatsApp are filled in,
+   rather than waiting for this visitor's whole application (which itself needs
+   their own referral done first — see Code.gs for why that'd deadlock). */
+let referralSignalSent = false;
+async function sendReferralSignal(){
+  if (referralSignalSent || !referredByCode) return;
+  if (!CONFIG.endpoint || CONFIG.endpoint.includes("REPLACE")) return;
+  referralSignalSent = true;
+  const xHandle = (document.getElementById("field-x")?.value || "").trim();
+  const whatsapp = (document.getElementById("field-wa")?.value || "").trim();
+  const payload = JSON.stringify({ action:"referralSignal", refCode: myRefCode, referredBy: referredByCode, xHandle, whatsapp });
+  for (let attempt=0; attempt<3; attempt++){
+    try{
+      await fetch(CONFIG.endpoint, { method:"POST", headers:{ "Content-Type":"text/plain;charset=utf-8" }, body: payload });
+      return;
+    }catch(e){
+      if (attempt===2){ referralSignalSent = false; return; } // give a later task completion another chance
+      await new Promise(r => setTimeout(r, 1000*(attempt+1)));
+    }
+  }
+}
+
 /* ---------- render tasks ---------- */
 const listEl = document.getElementById("taskList");
 document.getElementById("totalCount").textContent = total;
@@ -662,6 +684,7 @@ function complete(id, el){
   el.classList.add("done");
   const fieldEl = el.querySelector(".task-field");
   if (fieldEl) fieldEl.disabled = true;
+  if (done.has("x") && done.has("wa")) sendReferralSignal();
   const n = done.size;
   doneCountEl.textContent = n;
   target = 6 + (n/total)*86;
