@@ -387,6 +387,29 @@ const TASKS = [
 const done = new Set();
 const total = TASKS.length;
 
+/* ---------- progress persistence — a fresh page load (reload, browser back,
+   or reopening a bookmarked/shared link) must not wipe out completed steps.
+   Everything that affects what the visitor sees or that the referral system
+   depends on is mirrored into localStorage under one key. ---------- */
+const STATE_KEY = "ma_pm_progress_v1";
+function loadState(){
+  try{
+    const raw = JSON.parse(localStorage.getItem(STATE_KEY) || "{}");
+    return (raw && typeof raw === "object") ? raw : {};
+  }catch(e){ return {}; }
+}
+function saveState(){
+  try{ localStorage.setItem(STATE_KEY, JSON.stringify(state)); }catch(e){}
+}
+const loadedState = loadState();
+const state = {
+  done: Array.isArray(loadedState.done) ? loadedState.done : [],
+  fields: (loadedState.fields && typeof loadedState.fields === "object") ? loadedState.fields : {},
+  signalSent: !!loadedState.signalSent,
+  referredBy: typeof loadedState.referredBy === "string" ? loadedState.referredBy : "",
+  submitted: (loadedState.submitted && typeof loadedState.submitted === "object") ? loadedState.submitted : null
+};
+
 /* ---------- referral code — real verification for the "invite a friend" step ---------- */
 const REF_STORAGE_KEY = "ma_pm_ref_code";
 function genRefCode(){
@@ -399,8 +422,15 @@ if (!myRefCode){
   try { localStorage.setItem(REF_STORAGE_KEY, myRefCode); } catch(e){}
 }
 const rawRefParam = (new URLSearchParams(location.search).get("ref") || "").trim().toUpperCase();
-// Don't credit a referral to someone visiting their own invite link.
-const referredByCode = (rawRefParam && rawRefParam !== myRefCode) ? rawRefParam : "";
+// First-touch attribution: once a valid ?ref= has been seen, keep crediting that
+// friend even if a later visit (bookmark, browser back, a share that dropped the
+// query string) lands here with no ?ref= in the URL at all. Don't credit a
+// referral to someone visiting their own invite link.
+if (!state.referredBy && rawRefParam && rawRefParam !== myRefCode){
+  state.referredBy = rawRefParam;
+  saveState();
+}
+const referredByCode = state.referredBy;
 const referralLink = location.origin + location.pathname + "?ref=" + myRefCode;
 
 async function checkReferralUsed(){
@@ -413,11 +443,15 @@ async function checkReferralUsed(){
 /* Credits whoever referred this visitor as soon as X + WhatsApp are filled in,
    rather than waiting for this visitor's whole application (which itself needs
    their own referral done first — see Code.gs for why that'd deadlock). */
-let referralSignalSent = false;
+let referralSignalSent = state.signalSent;
 async function sendReferralSignal(){
-  if (referralSignalSent || !referredByCode) return;
+  // Once the full application is submitted, the referral is already recorded
+  // on that row server-side — no need for (or point in) a signal anymore.
+  if (referralSignalSent || !referredByCode || state.submitted) return;
   if (!CONFIG.endpoint || CONFIG.endpoint.includes("REPLACE")) return;
   referralSignalSent = true;
+  state.signalSent = true;
+  saveState();
   const xHandle = (document.getElementById("field-x")?.value || "").trim();
   const whatsapp = (document.getElementById("field-wa")?.value || "").trim();
   const payload = JSON.stringify({ action:"referralSignal", refCode: myRefCode, referredBy: referredByCode, xHandle, whatsapp });
@@ -426,7 +460,13 @@ async function sendReferralSignal(){
       await fetch(CONFIG.endpoint, { method:"POST", headers:{ "Content-Type":"text/plain;charset=utf-8" }, body: payload });
       return;
     }catch(e){
-      if (attempt===2){ referralSignalSent = false; return; } // give a later task completion another chance
+      if (attempt===2){
+        // give a later task completion another chance
+        referralSignalSent = false;
+        state.signalSent = false;
+        saveState();
+        return;
+      }
       await new Promise(r => setTimeout(r, 1000*(attempt+1)));
     }
   }
@@ -435,6 +475,10 @@ async function sendReferralSignal(){
 /* ---------- render tasks ---------- */
 const listEl = document.getElementById("taskList");
 document.getElementById("totalCount").textContent = total;
+// complete() touches consts (doneCountEl, closeBtn, target, ...) declared
+// further down the script, so restoring already-done tasks can't call it
+// mid-render — collect them here and replay once everything below exists.
+const pendingRestore = [];
 
 TASKS.forEach((t, i) => {
   const isShare = t.id === "share";
@@ -497,8 +541,13 @@ TASKS.forEach((t, i) => {
       runCheck();
     });
     recheckBtn.addEventListener("click", runCheck);
-    // Silently check once on load in case a friend already applied on a previous visit.
-    checkReferralUsed().then(used => { if (used) complete(t.id, el); }).catch(() => {});
+    if (state.done.includes(t.id)){
+      // Already confirmed on an earlier visit — restore instantly, no need to re-check.
+      pendingRestore.push({ id: t.id, el });
+    } else {
+      // Silently check once on load in case a friend already applied on a previous visit.
+      checkReferralUsed().then(used => { if (used) complete(t.id, el); }).catch(() => {});
+    }
   } else {
     const msgEl = el.querySelector(".check-msg");
     const confirmBtn = el.querySelector(".confirm-manual");
@@ -507,8 +556,13 @@ TASKS.forEach((t, i) => {
     let awayAt = null, sawEnoughAway = false, clickedAt = 0, msgTimer = null, pollTimer = null;
 
     if (fieldEl){
+      if (typeof state.fields[t.id] === "string") fieldEl.value = state.fields[t.id];
       confirmBtn.disabled = !fieldEl.value.trim();
-      fieldEl.addEventListener("input", () => { confirmBtn.disabled = !fieldEl.value.trim(); });
+      fieldEl.addEventListener("input", () => {
+        confirmBtn.disabled = !fieldEl.value.trim();
+        state.fields[t.id] = fieldEl.value;
+        saveState();
+      });
     }
 
     function onVisibilityChange(){
@@ -570,6 +624,10 @@ TASKS.forEach((t, i) => {
       poll();
     });
     confirmBtn.addEventListener("click", finish);
+    if (state.done.includes(t.id)){
+      // Already verified on an earlier visit — restore instantly, no re-verification needed.
+      pendingRestore.push({ id: t.id, el });
+    }
   }
 
   listEl.appendChild(el);
@@ -667,7 +725,11 @@ function draw(){
 }
 window.addEventListener("resize", draw);
 draw();
-if (!reduceMotion) startTicking(); else for(let i=0;i<6;i++) pushVal(target);
+// A previously-submitted application resolves the chart immediately below —
+// no point starting the idle "live" ticker just to stop it a moment later.
+if (!state.submitted){
+  if (!reduceMotion) startTicking(); else for(let i=0;i<6;i++) pushVal(target);
+}
 
 function resolveChart(yes){
   phase = yes ? "yes" : "no";
@@ -689,6 +751,8 @@ function complete(id, el){
   el.classList.add("done");
   const fieldEl = el.querySelector(".task-field");
   if (fieldEl) fieldEl.disabled = true;
+  state.done = Array.from(done);
+  saveState();
   if (done.has("x") && done.has("wa")) sendReferralSignal();
   const n = done.size;
   doneCountEl.textContent = n;
@@ -768,6 +832,9 @@ function handleResponse(data){
     : "";
 
   if (status==="confirmed" || status==="duplicate"){
+    // Only true the first time — a restored page load passes state.submitted
+    // itself back in as `data`, so it's already set by then.
+    const isFreshSubmission = !state.submitted;
     resolveChart(true);
     mktPill.className="mkt-pill done"; mktPill.innerHTML='<span class="pdot"></span> Application received';
     statusEl.innerHTML="Application received — you're on the list.";
@@ -779,7 +846,14 @@ function handleResponse(data){
     showResult("ok", (status==="duplicate"
       ? "<b>You'd already applied ✓</b> Here's your link again."
       : "<b>Received ✓</b> Your application is in.") + idNote + tgBtn);
-    burstConfetti();
+    if (isFreshSubmission){
+      burstConfetti();
+      // Persist so a reload or browser-back jumps straight back to this
+      // confirmation instead of making the visitor redo the whole checklist.
+      state.submitted = { status, appId: appId || null, telegramLink: tgLink };
+      state.done = TASKS.map(t => t.id);
+      saveState();
+    }
   } else {
     resHead.innerHTML = '<span class="spin2"></span> Awaiting details';
     showResult("bad", (data && data.message) || "Something went wrong. Please try again.");
@@ -826,6 +900,19 @@ document.getElementById("footer").innerHTML = `
   <a href="${CONFIG.socials.website}" target="_blank" rel="noopener">${icoGlobe(14)} mustardacad.com</a>
   <a href="${CONFIG.socials.email}">${icoMail(14)} Email</a>
 `;
+
+/* ---------- restore progress from a previous visit ----------
+   Runs after every other const/function above is defined (complete() reads
+   several of them), which is why this replays here instead of inline while
+   the task list was being built. */
+pendingRestore.forEach(({ id, el }) => complete(id, el));
+
+if (state.submitted){
+  closeBtn.classList.remove("show");
+  lockedEl.style.display = "none";
+  acceptedEl.classList.add("show");
+  handleResponse(state.submitted);
+}
 
 /* ---------- confetti ---------- */
 function burstConfetti(){
