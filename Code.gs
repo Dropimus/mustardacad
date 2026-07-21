@@ -177,9 +177,18 @@ function handleReferralSignal_(body) {
  * GET ?code=REFCODE — used by the "invite a friend" step to check
  * whether anyone has referred by this code, either by fully submitting
  * an application or by sending a referral signal (see above).
+ *
+ * GET ?action=leaderboard — used by referral-leaderboard.html to show
+ * the top referrers site-wide. See leaderboard_() below.
  */
 function doGet(e) {
-  const code = normalizeCode_(((e && e.parameter) || {}).code);
+  const params = (e && e.parameter) || {};
+
+  if ((params.action || "").toString().trim() === "leaderboard") {
+    return respond_(leaderboard_());
+  }
+
+  const code = normalizeCode_(params.code);
   if (!code) {
     return respond_({ used: false, count: 0 });
   }
@@ -199,6 +208,64 @@ function doGet(e) {
   }
 
   return respond_({ used: count > 0, count: count });
+}
+
+/**
+ * Builds the site-wide referral leaderboard: every referral code that has
+ * referred at least one person (via a full application or a referral
+ * signal — same two sources doGet's per-code lookup counts), ranked by
+ * how many people it referred.
+ *
+ * A code's owner is only knowable once *they* submit their own full
+ * application (their Name/Username land in the Applications row that
+ * carries their Referral Code) — referral signals only carry the
+ * *referred* visitor's details, not the referrer's. Until then the entry
+ * is shown anonymously so someone who's referred people mid-application
+ * still shows up on the board.
+ */
+function leaderboard_() {
+  const appValues = getSheet_().getDataRange().getValues();
+
+  // Referral Code -> { name, xHandle } for codes whose owner has submitted.
+  const owners = {};
+  for (let i = 1; i < appValues.length; i++) {
+    const ownCode = (appValues[i][9] || "").toString().trim().toUpperCase();
+    if (!ownCode) continue;
+    owners[ownCode] = {
+      name: (appValues[i][1] || "").toString().trim(),
+      xHandle: (appValues[i][2] || "").toString().trim()
+    };
+  }
+
+  // Referred By -> count, tallied across full applications and signals.
+  const counts = {};
+  for (let i = 1; i < appValues.length; i++) {
+    const referredBy = (appValues[i][10] || "").toString().trim().toUpperCase();
+    if (referredBy) counts[referredBy] = (counts[referredBy] || 0) + 1;
+  }
+  const pendingValues = getPendingSheet_().getDataRange().getValues();
+  for (let i = 1; i < pendingValues.length; i++) {
+    const referredBy = (pendingValues[i][2] || "").toString().trim().toUpperCase();
+    if (referredBy) counts[referredBy] = (counts[referredBy] || 0) + 1;
+  }
+
+  const rows = Object.keys(counts).map(function (code) {
+    const owner = owners[code];
+    return {
+      refCode: code,
+      name: owner ? owner.name : "",
+      xHandle: owner ? owner.xHandle : "",
+      count: counts[code]
+    };
+  });
+  rows.sort(function (a, b) { return b.count - a.count; });
+
+  const LIMIT = 50;
+  return {
+    updatedAt: new Date().toISOString(),
+    totalReferrals: rows.reduce(function (sum, r) { return sum + r.count; }, 0),
+    leaderboard: rows.slice(0, LIMIT)
+  };
 }
 
 function normalizeCode_(v) {

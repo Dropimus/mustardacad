@@ -160,6 +160,10 @@
     font-family:"Inter";font-size:11px;font-weight:600;padding:5px 9px;border-radius:7px;cursor:pointer}
   .ref-box .ref-copy:hover{background:rgba(95,224,0,.08)}
   .task.done .ref-box{display:none}
+  .ref-leaderboard{display:inline-block;margin-top:9px;font-family:"Space Mono";font-size:11px;
+    letter-spacing:.03em;color:var(--green-bright);text-decoration:none}
+  .ref-leaderboard:hover{text-decoration:underline}
+  .task.done .ref-leaderboard{display:none}
   .task-field{width:100%;font-family:"Inter";font-size:13.5px;color:var(--white);
     background:rgba(0,0,0,.35);border:1px solid var(--line-soft);border-radius:9px;
     padding:9px 11px;margin-top:9px;transition:border-color .2s}
@@ -444,7 +448,8 @@ TASKS.forEach((t, i) => {
       <h3>${t.title}</h3>
       <p>${t.desc}</p>
       ${t.captureField ? `<input type="${t.captureField.type}" class="task-field" id="field-${t.id}" placeholder="${t.captureField.placeholder}" autocomplete="${t.captureField.autocomplete||"off"}"${t.captureField.inputmode ? ` inputmode="${t.captureField.inputmode}"` : ""} />` : ""}
-      ${isShare ? `<div class="ref-box"><span class="ref-link">${referralLink}</span><button type="button" class="ref-copy">Copy</button></div>` : ""}
+      ${isShare ? `<div class="ref-box"><span class="ref-link">${referralLink}</span><button type="button" class="ref-copy">Copy</button></div>
+      <a class="ref-leaderboard" href="referral-leaderboard.html">🏆 See the referral leaderboard</a>` : ""}
       <div class="actions">
         <button class="btn btn-open">${t.cta}
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#04210a" stroke-width="2.4" stroke-linecap="round"><path d="M7 17 17 7M9 7h8v8"/></svg>
