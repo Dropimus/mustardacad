@@ -17,6 +17,20 @@
  * confirms at least one submission carries the applicant's code — that
  * part is real, verifiable, and needs no external API.
  *
+ * Referral hardening: a submission can't credit itself — if the
+ * "referredBy" code matches the submitter's own "refCode" (i.e. they
+ * carried their own invite link's ?ref= param, typically by opening it
+ * themselves), the referral is dropped rather than counted. Both codes
+ * are also validated against the shape genRefCode() actually produces,
+ * so junk/hand-typed values in ?ref= can't pollute the sheet or be used
+ * to probe doGet. The Polymarket application flow additionally requires
+ * a non-empty X handle and WhatsApp number server-side, mirroring the
+ * checklist gating in polymarket-apply.html, so those steps can't be
+ * skipped by calling this endpoint directly instead of using the page.
+ * None of this proves the referred signup is a distinct real person —
+ * that would need real identity/email verification — it only closes the
+ * "open your own link and resubmit" and "call the API directly" gaps.
+ *
  * Deploy:
  *   1. Create a Google Sheet (or open an existing one).
  *   2. Extensions -> Apps Script, delete the placeholder code, paste this file.
@@ -40,6 +54,9 @@
 const SHEET_NAME = "Applications";
 const TELEGRAM_LINK = "https://t.me/MustardAcademy";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Matches what genRefCode() in the front-end actually produces (base-36 chars,
+// uppercased). Anything outside this shape is treated as not a real code.
+const CODE_RE = /^[A-Z0-9]{4,12}$/;
 const HEADERS = ["Timestamp", "Name", "Username", "Email", "Track", "Source", "Application ID", "Telegram", "Polymarket", "Referral Code", "Referred By", "WhatsApp"];
 
 function doPost(e) {
@@ -58,11 +75,29 @@ function doPost(e) {
   const email = (body.email || "").toString().trim().toLowerCase();
   const track = (body.track || "").toString().trim();
   const source = (body.source || "Polymarket Application").toString().trim();
-  const refCode = (body.refCode || "").toString().trim().toUpperCase();
-  const referredBy = (body.referredBy || "").toString().trim().toUpperCase();
+  const refCode = normalizeCode_(body.refCode);
+  let referredBy = normalizeCode_(body.referredBy);
 
   if (name.length < 2 || !EMAIL_RE.test(email)) {
     return respond_({ status: "error", message: "Missing or invalid name/email." });
+  }
+
+  // The apply page's checklist requires an X username and WhatsApp number
+  // before submission unlocks — enforce that here too so it can't be
+  // skipped by posting to this endpoint directly.
+  if (source === "Polymarket Application") {
+    if (xHandle.length < 2) {
+      return respond_({ status: "error", message: "Missing X username." });
+    }
+    if (whatsapp.replace(/\D/g, "").length < 7) {
+      return respond_({ status: "error", message: "Missing or invalid WhatsApp number." });
+    }
+  }
+
+  // A ?ref= code that matches the submitter's own code is their own invite
+  // link, not a friend's — don't let it count as a referral.
+  if (referredBy && referredBy === refCode) {
+    referredBy = "";
   }
 
   const sheet = getSheet_();
@@ -82,7 +117,7 @@ function doPost(e) {
  * code, i.e. whether the applicant's invite link actually got used.
  */
 function doGet(e) {
-  const code = (((e && e.parameter) || {}).code || "").toString().trim().toUpperCase();
+  const code = normalizeCode_(((e && e.parameter) || {}).code);
   if (!code) {
     return respond_({ used: false, count: 0 });
   }
@@ -94,6 +129,11 @@ function doGet(e) {
     if (referredBy && referredBy === code) count++;
   }
   return respond_({ used: count > 0, count: count });
+}
+
+function normalizeCode_(v) {
+  const code = (v || "").toString().trim().toUpperCase();
+  return CODE_RE.test(code) ? code : "";
 }
 
 function getSheet_() {

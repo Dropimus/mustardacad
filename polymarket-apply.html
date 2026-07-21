@@ -394,7 +394,9 @@ if (!myRefCode){
   myRefCode = genRefCode();
   try { localStorage.setItem(REF_STORAGE_KEY, myRefCode); } catch(e){}
 }
-const referredByCode = (new URLSearchParams(location.search).get("ref") || "").trim().toUpperCase();
+const rawRefParam = (new URLSearchParams(location.search).get("ref") || "").trim().toUpperCase();
+// Don't credit a referral to someone visiting their own invite link.
+const referredByCode = (rawRefParam && rawRefParam !== myRefCode) ? rawRefParam : "";
 const referralLink = location.origin + location.pathname + "?ref=" + myRefCode;
 
 async function checkReferralUsed(){
