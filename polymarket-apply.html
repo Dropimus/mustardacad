@@ -804,16 +804,29 @@ const STATUS_POLL_MS = 45000;
 let statusPollTimer = null;
 function applyStatusData(data){
   if (!data || !data.found) return;
+  // Once the whole application is approved, every task reads as verified —
+  // an admin approving the row (even via the manual Approved override) is
+  // enough, they don't also need to have ticked each task column.
   const taskKey = { x:"xVerified", wa:"waVerified", pm:"pmVerified", share:"refVerified" };
   Object.keys(taskKey).forEach(id => {
     if (!done.has(id)) return;
     const el = document.getElementById("task-"+id);
-    if (el) applyTaskVerification(id, el, !!data[taskKey[id]]);
+    if (el) applyTaskVerification(id, el, !!data.approved || !!data[taskKey[id]]);
   });
   saveState();
   if (state.submitted && !!data.approved !== !!state.submitted.approved){
     handleResponse({ status: state.submitted.status, appId: state.submitted.appId, approved: !!data.approved, telegramLink: state.submitted.telegramLink });
   }
+}
+/* Marks every self-checked task Verified — used when a response already
+   carries approved:true but no per-task breakdown (e.g. the confirmation
+   the submit call itself returns), so pills don't lag a tick behind. */
+function markAllTasksVerified(){
+  done.forEach(id => {
+    const el = document.getElementById("task-"+id);
+    if (el) applyTaskVerification(id, el, true);
+  });
+  saveState();
 }
 async function pollStatusOnce(){
   if (!CONFIG.endpoint || CONFIG.endpoint.includes("REPLACE")) return;
@@ -939,6 +952,7 @@ function handleResponse(data){
       resTitle.textContent = "You're in! 🎉";
       resSub.textContent = "We've reviewed your application — request to join Telegram below.";
       showResult("ok", "<b>Approved ✓</b> Request to join Telegram below." + idNote + tgBtn);
+      markAllTasksVerified();
       stopStatusPolling();
       if (!wasApproved) burstConfetti();
     } else {
