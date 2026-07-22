@@ -942,14 +942,14 @@ function handleResponse(data){
       stopStatusPolling();
       if (!wasApproved) burstConfetti();
     } else {
-      mktPill.className="mkt-pill await"; mktPill.innerHTML='<span class="pdot"></span> Waiting for manual review';
-      statusEl.innerHTML="Waiting for manual review — this page updates automatically once you're approved.";
-      resHead.innerHTML = '<span class="spin2"></span> Waiting for manual review';
+      mktPill.className="mkt-pill await"; mktPill.innerHTML='<span class="pdot"></span> Pending review';
+      statusEl.innerHTML="Pending review — this page updates automatically once you're approved.";
+      resHead.innerHTML = '<span class="spin2"></span> Pending review';
       resTitle.textContent = "You're in the queue";
-      resSub.textContent = "We're manually reviewing your X follow, WhatsApp and Polymarket details. No need to refresh — this page updates once you're approved.";
+      resSub.textContent = "We're reviewing your X follow, WhatsApp and Polymarket details. No need to refresh — this page updates once you're approved.";
       showResult("ok", (status==="duplicate"
-        ? "<b>Already applied ✓</b> Waiting for manual review."
-        : "<b>Submitted ✓</b> Waiting for manual review.") + idNote);
+        ? "<b>Already applied ✓</b> Pending review."
+        : "<b>Submitted ✓</b> Pending review.") + idNote);
       startStatusPolling();
     }
 
