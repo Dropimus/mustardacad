@@ -67,19 +67,31 @@
  * header row:
  *   Timestamp | Name | Username | Email | Track | Source |
  *   Application ID | Telegram | Polymarket | Referral Code | Referred By |
- *   WhatsApp | Approved
+ *   WhatsApp | Approved | X Verified | WhatsApp Verified |
+ *   Polymarket Verified | Referral Verified
  *
  * New columns are appended after the original columns so existing rows
  * from before each change stay aligned.
  *
- * Manual review: every new row starts with an empty "Approved" cell. An
- * admin reviews the applicant (X follow, WhatsApp, Polymarket account) and
- * types TRUE into that cell once satisfied — Google Sheets stores that as
- * a real boolean. The apply page polls doGet's ?action=status endpoint by
- * Application ID and only reveals the "Request to join Telegram" button
- * once it sees Approved=TRUE; until then it shows "Waiting for manual
- * review". Typing FALSE (or leaving it blank) keeps the applicant in that
- * waiting state.
+ * Manual review, per checklist step: each of the four apply-page tasks
+ * (Follow X, Join WhatsApp, Open Polymarket, Invite a friend) gets its own
+ * "* Verified" column, all starting blank/FALSE. As soon as a visitor
+ * self-checks a task on the apply page (before they've even submitted
+ * their name/email), a lightweight "taskProgress" POST creates or updates
+ * a row for them keyed by their Referral Code — the one identifier the
+ * front-end already has from the moment they land on the page — so an
+ * admin can start reviewing (and typing TRUE into a Verified column)
+ * without waiting for the full submission. When the applicant does submit
+ * their full application, doPost fills in the rest of that same row
+ * in place rather than creating a duplicate.
+ *
+ * "Referral Verified" is also auto-derived from real usage (see
+ * countReferralUses_) — an admin can still force it TRUE manually, but
+ * normally there's nothing to review since a real referral is already
+ * server-verifiable. "Approved" (the field that unlocks the Telegram
+ * button) is likewise auto-derived: true once all four Verified columns
+ * read true, with a manual TRUE in Approved still available as an
+ * override/escape hatch. See parseApproved_, statusForRow_.
  */
 
 const SHEET_NAME = "Applications";
@@ -89,11 +101,30 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Matches what genRefCode() in the front-end actually produces (base-36 chars,
 // uppercased). Anything outside this shape is treated as not a real code.
 const CODE_RE = /^[A-Z0-9]{4,12}$/;
-const HEADERS = ["Timestamp", "Name", "Username", "Email", "Track", "Source", "Application ID", "Telegram", "Polymarket", "Referral Code", "Referred By", "WhatsApp", "Approved"];
+const HEADERS = [
+  "Timestamp", "Name", "Username", "Email", "Track", "Source",
+  "Application ID", "Telegram", "Polymarket", "Referral Code", "Referred By", "WhatsApp",
+  "Approved", "X Verified", "WhatsApp Verified", "Polymarket Verified", "Referral Verified"
+];
 const PENDING_HEADERS = ["Timestamp", "Ref Code", "Referred By", "X Handle", "WhatsApp"];
 // 0-based column indexes into a HEADERS row, kept in sync with HEADERS above.
+const COL_TIMESTAMP = 0;
+const COL_NAME = 1;
+const COL_USERNAME = 2;
+const COL_EMAIL = 3;
+const COL_TRACK = 4;
+const COL_SOURCE = 5;
 const COL_APP_ID = 6;
+const COL_TELEGRAM = 7;
+const COL_POLYMARKET = 8;
+const COL_REF_CODE = 9;
+const COL_REFERRED_BY = 10;
+const COL_WHATSAPP = 11;
 const COL_APPROVED = 12;
+const COL_X_VERIFIED = 13;
+const COL_WA_VERIFIED = 14;
+const COL_PM_VERIFIED = 15;
+const COL_REF_VERIFIED = 16;
 
 function doPost(e) {
   let body;
@@ -105,6 +136,10 @@ function doPost(e) {
 
   if ((body.action || "").toString().trim() === "referralSignal") {
     return handleReferralSignal_(body);
+  }
+
+  if ((body.action || "").toString().trim() === "taskProgress") {
+    return handleTaskProgress_(body);
   }
 
   const name = (body.name || "").toString().trim();
@@ -141,14 +176,86 @@ function doPost(e) {
   }
 
   const sheet = getSheet_();
-  const existing = findByEmail_(sheet, email);
-  if (existing) {
-    return respond_({ status: "duplicate", appId: existing[COL_APP_ID], approved: parseApproved_(existing[COL_APPROVED]), telegramLink: TELEGRAM_LINK });
+  const existingByEmail = findByEmail_(sheet, email);
+  if (existingByEmail) {
+    const dupStatus = statusForRow_(existingByEmail);
+    return respond_({ status: "duplicate", appId: existingByEmail[COL_APP_ID], approved: dupStatus.approved, telegramLink: TELEGRAM_LINK });
   }
 
   const appId = generateAppId_();
-  sheet.appendRow([new Date(), name, xHandle, email, track, source, appId, telegram, polymarket, refCode, referredBy, whatsapp, false]);
-  return respond_({ status: "confirmed", appId: appId, approved: false, telegramLink: TELEGRAM_LINK });
+  // A pre-submission taskProgress row may already exist for this Referral
+  // Code — fill it in rather than appending a duplicate, so any Verified
+  // columns an admin already set aren't lost.
+  const rowNum = refCode ? findRowIndexByRefCode_(sheet, refCode) : -1;
+  if (rowNum === -1) {
+    const row = new Array(HEADERS.length).fill("");
+    row[COL_TIMESTAMP] = new Date();
+    row[COL_NAME] = name;
+    row[COL_USERNAME] = xHandle;
+    row[COL_EMAIL] = email;
+    row[COL_TRACK] = track;
+    row[COL_SOURCE] = source;
+    row[COL_APP_ID] = appId;
+    row[COL_TELEGRAM] = telegram;
+    row[COL_POLYMARKET] = polymarket;
+    row[COL_REF_CODE] = refCode;
+    row[COL_REFERRED_BY] = referredBy;
+    row[COL_WHATSAPP] = whatsapp;
+    row[COL_APPROVED] = false;
+    sheet.appendRow(row);
+    return respond_({ status: "confirmed", appId: appId, approved: false, telegramLink: TELEGRAM_LINK });
+  }
+
+  sheet.getRange(rowNum, COL_TIMESTAMP + 1).setValue(new Date());
+  sheet.getRange(rowNum, COL_NAME + 1).setValue(name);
+  sheet.getRange(rowNum, COL_USERNAME + 1).setValue(xHandle);
+  sheet.getRange(rowNum, COL_EMAIL + 1).setValue(email);
+  sheet.getRange(rowNum, COL_TRACK + 1).setValue(track);
+  sheet.getRange(rowNum, COL_SOURCE + 1).setValue(source);
+  sheet.getRange(rowNum, COL_APP_ID + 1).setValue(appId);
+  sheet.getRange(rowNum, COL_TELEGRAM + 1).setValue(telegram);
+  sheet.getRange(rowNum, COL_POLYMARKET + 1).setValue(polymarket);
+  sheet.getRange(rowNum, COL_REFERRED_BY + 1).setValue(referredBy);
+  sheet.getRange(rowNum, COL_WHATSAPP + 1).setValue(whatsapp);
+  const updatedRow = sheet.getRange(rowNum, 1, 1, HEADERS.length).getValues()[0];
+  const status = statusForRow_(updatedRow);
+  return respond_({ status: "confirmed", appId: appId, approved: status.approved, telegramLink: TELEGRAM_LINK });
+}
+
+/**
+ * POST {action:"taskProgress", refCode, task, xHandle?, whatsapp?} — sent
+ * as soon as a visitor self-checks a checklist task on the apply page,
+ * well before they submit their name/email. Creates or updates a row for
+ * them (keyed by Referral Code, the one ID they already have) so an admin
+ * can start manually verifying tasks without waiting for full submission.
+ * Responds with that row's current status so the page can immediately
+ * reflect any verification an admin already did.
+ */
+function handleTaskProgress_(body) {
+  const refCode = normalizeCode_(body.refCode);
+  const task = (body.task || "").toString().trim();
+  const xHandle = (body.xHandle || "").toString().trim();
+  const whatsapp = (body.whatsapp || "").toString().trim();
+  if (!refCode) return respond_({ status: "ignored" });
+
+  const sheet = getSheet_();
+  const rowNum = findRowIndexByRefCode_(sheet, refCode);
+  if (rowNum === -1) {
+    const row = new Array(HEADERS.length).fill("");
+    row[COL_TIMESTAMP] = new Date();
+    row[COL_REF_CODE] = refCode;
+    if (task === "x" && xHandle) row[COL_USERNAME] = xHandle;
+    if (task === "wa" && whatsapp) row[COL_WHATSAPP] = whatsapp;
+    row[COL_APPROVED] = false;
+    sheet.appendRow(row);
+    const newRow = sheet.getRange(sheet.getLastRow(), 1, 1, HEADERS.length).getValues()[0];
+    return respond_(statusForRow_(newRow));
+  }
+
+  if (task === "x" && xHandle) sheet.getRange(rowNum, COL_USERNAME + 1).setValue(xHandle);
+  if (task === "wa" && whatsapp) sheet.getRange(rowNum, COL_WHATSAPP + 1).setValue(whatsapp);
+  const row = sheet.getRange(rowNum, 1, 1, HEADERS.length).getValues()[0];
+  return respond_(statusForRow_(row));
 }
 
 /**
@@ -193,9 +300,12 @@ function handleReferralSignal_(body) {
  * GET ?action=leaderboard — used by referral-leaderboard.html to show
  * the top referrers site-wide. See leaderboard_() below.
  *
- * GET ?action=status&appId=MA-XXXXXXXX — used by the apply page to poll
- * whether an admin has approved this Application ID yet. See the
- * "Manual review" note in the file-level comment above.
+ * GET ?action=status&refCode=XXXXXX (or &appId=MA-XXXXXXXX) — used by the
+ * apply page to poll per-task verification and overall approval. Keyed by
+ * Referral Code so it works from the moment the visitor lands on the page,
+ * long before an Application ID exists; appId is accepted too for
+ * resuming a session where only the ID is known. See the "Manual review,
+ * per checklist step" note in the file-level comment above.
  */
 function doGet(e) {
   const params = (e && e.parameter) || {};
@@ -205,7 +315,9 @@ function doGet(e) {
   }
 
   if ((params.action || "").toString().trim() === "status") {
-    return respond_(statusForAppId_((params.appId || "").toString().trim()));
+    const refCode = normalizeCode_(params.refCode);
+    const appId = (params.appId || "").toString().trim();
+    return respond_(statusForKey_(refCode, appId));
   }
 
   const code = normalizeCode_(params.code);
@@ -213,20 +325,7 @@ function doGet(e) {
     return respond_({ used: false, count: 0 });
   }
 
-  let count = 0;
-
-  const appValues = getSheet_().getDataRange().getValues();
-  for (let i = 1; i < appValues.length; i++) {
-    const referredBy = (appValues[i][10] || "").toString().trim().toUpperCase();
-    if (referredBy && referredBy === code) count++;
-  }
-
-  const pendingValues = getPendingSheet_().getDataRange().getValues();
-  for (let i = 1; i < pendingValues.length; i++) {
-    const referredBy = (pendingValues[i][2] || "").toString().trim().toUpperCase();
-    if (referredBy && referredBy === code) count++;
-  }
-
+  const count = countReferralUses_(code);
   return respond_({ used: count > 0, count: count });
 }
 
@@ -289,19 +388,73 @@ function leaderboard_() {
 }
 
 /**
- * Looks up a single application by its Application ID and reports whether
- * an admin has marked it Approved yet. { found: false } if no row carries
- * that ID (typo, or the sheet was cleared).
+ * Looks up a single application row by Referral Code (checked first) or
+ * Application ID, and reports its per-task verification + overall
+ * approval. { found: false } if neither key matches any row.
  */
-function statusForAppId_(appId) {
-  if (!appId) return { found: false, approved: false };
+function statusForKey_(refCode, appId) {
   const values = getSheet_().getDataRange().getValues();
   for (let i = 1; i < values.length; i++) {
-    if ((values[i][COL_APP_ID] || "").toString().trim() === appId) {
-      return { found: true, approved: parseApproved_(values[i][COL_APPROVED]) };
+    const rowRef = (values[i][COL_REF_CODE] || "").toString().trim().toUpperCase();
+    const rowAppId = (values[i][COL_APP_ID] || "").toString().trim();
+    if ((refCode && rowRef === refCode) || (appId && rowAppId === appId)) {
+      return statusForRow_(values[i]);
     }
   }
-  return { found: false, approved: false };
+  return { found: false, approved: false, xVerified: false, waVerified: false, pmVerified: false, refVerified: false };
+}
+
+/**
+ * Derives the status object the apply page polls for from one sheet row.
+ * Referral Verified is true if the admin typed TRUE OR a real referral
+ * use is already on record (see countReferralUses_) — it doesn't need
+ * both. Approved is true if the admin typed TRUE directly OR all four
+ * task columns read true — admins normally never touch Approved at all;
+ * it just falls out of the per-task columns.
+ */
+function statusForRow_(row) {
+  const xVerified = parseApproved_(row[COL_X_VERIFIED]);
+  const waVerified = parseApproved_(row[COL_WA_VERIFIED]);
+  const pmVerified = parseApproved_(row[COL_PM_VERIFIED]);
+  const refCode = (row[COL_REF_CODE] || "").toString().trim().toUpperCase();
+  const refVerified = parseApproved_(row[COL_REF_VERIFIED]) || countReferralUses_(refCode) > 0;
+  const approved = parseApproved_(row[COL_APPROVED]) || (xVerified && waVerified && pmVerified && refVerified);
+  return {
+    found: true,
+    appId: row[COL_APP_ID] || null,
+    approved: approved,
+    xVerified: xVerified,
+    waVerified: waVerified,
+    pmVerified: pmVerified,
+    refVerified: refVerified
+  };
+}
+
+/** 1-based sheet row number for a Referral Code, or -1 if no row has it. */
+function findRowIndexByRefCode_(sheet, refCode) {
+  if (!refCode) return -1;
+  const values = sheet.getDataRange().getValues();
+  for (let i = 1; i < values.length; i++) {
+    if ((values[i][COL_REF_CODE] || "").toString().trim().toUpperCase() === refCode) return i + 1;
+  }
+  return -1;
+}
+
+/** How many submissions/signals carry this code as their Referred By. */
+function countReferralUses_(code) {
+  if (!code) return 0;
+  let count = 0;
+  const appValues = getSheet_().getDataRange().getValues();
+  for (let i = 1; i < appValues.length; i++) {
+    const referredBy = (appValues[i][COL_REFERRED_BY] || "").toString().trim().toUpperCase();
+    if (referredBy && referredBy === code) count++;
+  }
+  const pendingValues = getPendingSheet_().getDataRange().getValues();
+  for (let i = 1; i < pendingValues.length; i++) {
+    const referredBy = (pendingValues[i][2] || "").toString().trim().toUpperCase();
+    if (referredBy && referredBy === code) count++;
+  }
+  return count;
 }
 
 /**
@@ -351,7 +504,7 @@ function ensureHeaders_(sheet, headers) {
 function findByEmail_(sheet, email) {
   const values = sheet.getDataRange().getValues();
   for (let i = 1; i < values.length; i++) {
-    const rowEmail = (values[i][3] || "").toString().trim().toLowerCase();
+    const rowEmail = (values[i][COL_EMAIL] || "").toString().trim().toLowerCase();
     if (rowEmail && rowEmail === email) return values[i];
   }
   return null;

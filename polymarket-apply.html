@@ -148,9 +148,13 @@
   .checking-pill.show{display:inline-flex}
   .checking-pill .spin3{width:12px;height:12px;border:2px solid rgba(95,224,0,.25);
     border-top-color:var(--green);border-radius:50%;display:inline-block;animation:spin .7s linear infinite}
-  .done-pill{font-family:"Space Mono";font-size:11px;color:var(--green-bright);
-    letter-spacing:.05em;display:none}
-  .task.done .done-pill{display:inline}
+  .done-pill{font-family:"Space Mono";font-size:11px;color:var(--amber);
+    letter-spacing:.05em;display:none;align-items:center;gap:6px}
+  .task.done .done-pill{display:inline-flex}
+  .task.done.verified .done-pill{color:var(--green-bright)}
+  .done-pill .pend-dot{width:11px;height:11px;border:2px solid rgba(255,206,90,.3);
+    border-top-color:var(--amber);border-radius:50%;display:inline-block;animation:spin .7s linear infinite}
+  .task.done.verified .done-pill .pend-dot{display:none}
   .task.done .actions .btn{display:none}
   .ref-box{display:flex;align-items:center;gap:8px;margin-top:10px;padding:8px 10px;
     background:rgba(0,0,0,.25);border:1px solid var(--line-soft);border-radius:9px}
@@ -407,8 +411,15 @@ const state = {
   fields: (loadedState.fields && typeof loadedState.fields === "object") ? loadedState.fields : {},
   signalSent: !!loadedState.signalSent,
   referredBy: typeof loadedState.referredBy === "string" ? loadedState.referredBy : "",
-  submitted: (loadedState.submitted && typeof loadedState.submitted === "object") ? loadedState.submitted : null
+  submitted: (loadedState.submitted && typeof loadedState.submitted === "object") ? loadedState.submitted : null,
+  // Which self-checked tasks an admin has since confirmed via the sheet
+  // (see the "Verified" columns in Code.gs) — distinct from `done`, which
+  // is just the visitor's own self-report.
+  verified: Array.isArray(loadedState.verified) ? loadedState.verified : [],
+  taskProgressSent: Array.isArray(loadedState.taskProgressSent) ? loadedState.taskProgressSent : []
 };
+const verified = new Set(state.verified);
+const taskProgressSent = new Set(state.taskProgressSent);
 
 /* ---------- referral code — real verification for the "invite a friend" step ---------- */
 const REF_STORAGE_KEY = "ma_pm_ref_code";
@@ -504,7 +515,7 @@ TASKS.forEach((t, i) => {
           : `<span class="checking-pill"><span class="spin3"></span><span class="check-msg">Marking complete…</span></span>
              <button type="button" class="btn btn-confirm confirm-manual hidden">I've done this — verify</button>`
         }
-        <span class="done-pill">Completed</span>
+        <span class="done-pill"><span class="pend-dot"></span><span class="done-pill-txt">Pending verification</span></span>
       </div>
     </div>
     <div class="check"><svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></div>
@@ -744,6 +755,83 @@ function resolveChart(yes){
   }, 90);
 }
 
+/* ---------- per-task admin verification ---------- */
+// Reflects whether an admin has confirmed a self-checked task (see the
+// "* Verified" columns in Code.gs) on that task's pill. A task can be
+// `done` (self-reported) without being `verified` yet.
+function applyTaskVerification(id, el, isVerified){
+  if (isVerified === undefined) isVerified = verified.has(id);
+  if (isVerified) verified.add(id); else verified.delete(id);
+  state.verified = Array.from(verified);
+  const txt = el.querySelector(".done-pill-txt");
+  if (isVerified){
+    el.classList.add("verified");
+    if (txt) txt.textContent = "Verified";
+  } else {
+    el.classList.remove("verified");
+    if (txt) txt.textContent = "Pending verification";
+  }
+}
+
+/* Tells the backend a task was self-checked, so a row exists for the
+   admin to review well before the visitor submits name/email. Fire-and-
+   forget: if it fails, we just retry on the next task completion or poll. */
+async function sendTaskProgress(id){
+  if (taskProgressSent.has(id)) return;
+  if (!CONFIG.endpoint || CONFIG.endpoint.includes("REPLACE")) return;
+  taskProgressSent.add(id);
+  state.taskProgressSent = Array.from(taskProgressSent);
+  saveState();
+  const payload = { action:"taskProgress", refCode: myRefCode, task: id };
+  if (id === "x") payload.xHandle = state.fields.x || "";
+  if (id === "wa") payload.whatsapp = state.fields.wa || "";
+  try{
+    const res = await fetch(CONFIG.endpoint, { method:"POST", headers:{ "Content-Type":"text/plain;charset=utf-8" }, body: JSON.stringify(payload) });
+    const data = await res.json();
+    applyStatusData(data);
+  }catch(e){
+    taskProgressSent.delete(id);
+    state.taskProgressSent = Array.from(taskProgressSent);
+    saveState();
+  }
+}
+
+/* ---------- poll for manual-review verification/approval ----------
+   Runs from the moment a task is self-checked (long before the name/email
+   form even appears) all the way through post-submission approval, keyed
+   by the visitor's Referral Code — the one ID available throughout. */
+const STATUS_POLL_MS = 45000;
+let statusPollTimer = null;
+function applyStatusData(data){
+  if (!data || !data.found) return;
+  const taskKey = { x:"xVerified", wa:"waVerified", pm:"pmVerified", share:"refVerified" };
+  Object.keys(taskKey).forEach(id => {
+    if (!done.has(id)) return;
+    const el = document.getElementById("task-"+id);
+    if (el) applyTaskVerification(id, el, !!data[taskKey[id]]);
+  });
+  saveState();
+  if (state.submitted && !!data.approved !== !!state.submitted.approved){
+    handleResponse({ status: state.submitted.status, appId: state.submitted.appId, approved: !!data.approved, telegramLink: state.submitted.telegramLink });
+  }
+}
+async function pollStatusOnce(){
+  if (!CONFIG.endpoint || CONFIG.endpoint.includes("REPLACE")) return;
+  try{
+    const url = CONFIG.endpoint + (CONFIG.endpoint.includes("?") ? "&" : "?") + "action=status&refCode=" + encodeURIComponent(myRefCode);
+    const res = await fetch(url);
+    applyStatusData(await res.json());
+  }catch(e){ /* network hiccup — try again next tick */ }
+}
+function startStatusPolling(){
+  if (statusPollTimer) return;
+  pollStatusOnce();
+  statusPollTimer = setInterval(pollStatusOnce, STATUS_POLL_MS);
+}
+function stopStatusPolling(){
+  if (statusPollTimer){ clearInterval(statusPollTimer); statusPollTimer = null; }
+}
+
 /* ---------- task completion drives the (real) progress bar ---------- */
 function complete(id, el){
   if (done.has(id)) return;
@@ -753,6 +841,9 @@ function complete(id, el){
   if (fieldEl) fieldEl.disabled = true;
   state.done = Array.from(done);
   saveState();
+  applyTaskVerification(id, el);
+  if (!verified.has(id)) sendTaskProgress(id);
+  startStatusPolling();
   if (done.has("x") && done.has("wa")) sendReferralSignal();
   const n = done.size;
   doneCountEl.textContent = n;
@@ -859,7 +950,7 @@ function handleResponse(data){
       showResult("ok", (status==="duplicate"
         ? "<b>Already applied ✓</b> Waiting for manual review."
         : "<b>Submitted ✓</b> Waiting for manual review.") + idNote);
-      startStatusPolling(appId);
+      startStatusPolling();
     }
 
     if (isFreshSubmission){
@@ -876,31 +967,6 @@ function handleResponse(data){
     resHead.innerHTML = '<span class="spin2"></span> Awaiting details';
     showResult("bad", (data && data.message) || "Something went wrong. Please try again.");
   }
-}
-
-/* ---------- poll for manual-review approval ----------
-   Once an application is submitted but not yet approved, check back
-   periodically so the page can reveal the Telegram button without the
-   visitor needing to reload. Stops once approved (see handleResponse). */
-const STATUS_POLL_MS = 45000;
-let statusPollTimer = null;
-async function pollStatusOnce(appId){
-  if (!CONFIG.endpoint || CONFIG.endpoint.includes("REPLACE") || !appId) return;
-  try{
-    const url = CONFIG.endpoint + (CONFIG.endpoint.includes("?") ? "&" : "?") + "action=status&appId=" + encodeURIComponent(appId);
-    const res = await fetch(url);
-    const data = await res.json();
-    if (data && data.found && data.approved && state.submitted && !state.submitted.approved){
-      handleResponse({ status: state.submitted.status, appId, approved: true, telegramLink: state.submitted.telegramLink });
-    }
-  }catch(e){ /* network hiccup — try again next tick */ }
-}
-function startStatusPolling(appId){
-  if (statusPollTimer || !appId) return;
-  statusPollTimer = setInterval(()=>pollStatusOnce(appId), STATUS_POLL_MS);
-}
-function stopStatusPolling(){
-  if (statusPollTimer){ clearInterval(statusPollTimer); statusPollTimer = null; }
 }
 
 function hideForm(){
