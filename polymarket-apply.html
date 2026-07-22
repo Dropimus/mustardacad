@@ -825,6 +825,7 @@ function handleResponse(data){
   const status = (data && data.status) || "error";
   const tgLink = (data && data.telegramLink) || CONFIG.telegramLink;
   const appId = data && data.appId;
+  const approved = !!(data && data.approved);
   const tgBtn = `<a class="cls" href="${tgLink}" target="_blank" rel="noopener">Request to join Telegram
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#04210a" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>`;
   const idNote = appId
@@ -835,29 +836,71 @@ function handleResponse(data){
     // Only true the first time — a restored page load passes state.submitted
     // itself back in as `data`, so it's already set by then.
     const isFreshSubmission = !state.submitted;
+    const wasApproved = !!(state.submitted && state.submitted.approved);
     resolveChart(true);
-    mktPill.className="mkt-pill done"; mktPill.innerHTML='<span class="pdot"></span> Application received';
-    statusEl.innerHTML="Application received — you're on the list.";
     acceptedEl.classList.add("done");
-    resHead.innerHTML = `<span class="tick">${TICK}</span> Application received`;
-    resTitle.textContent = "You're in! 🎉";
-    resSub.textContent = "We'll check your X follow and email, then you can request to join Telegram below.";
     hideForm();
-    showResult("ok", (status==="duplicate"
-      ? "<b>You'd already applied ✓</b> Here's your link again."
-      : "<b>Received ✓</b> Your application is in.") + idNote + tgBtn);
+
+    if (approved){
+      mktPill.className="mkt-pill done"; mktPill.innerHTML='<span class="pdot"></span> Approved';
+      statusEl.innerHTML="You're approved — request to join Telegram below.";
+      resHead.innerHTML = `<span class="tick">${TICK}</span> Approved`;
+      resTitle.textContent = "You're in! 🎉";
+      resSub.textContent = "We've reviewed your application — request to join Telegram below.";
+      showResult("ok", "<b>Approved ✓</b> Request to join Telegram below." + idNote + tgBtn);
+      stopStatusPolling();
+      if (!wasApproved) burstConfetti();
+    } else {
+      mktPill.className="mkt-pill await"; mktPill.innerHTML='<span class="pdot"></span> Waiting for manual review';
+      statusEl.innerHTML="Waiting for manual review — this page updates automatically once you're approved.";
+      resHead.innerHTML = '<span class="spin2"></span> Waiting for manual review';
+      resTitle.textContent = "You're in the queue";
+      resSub.textContent = "We're manually reviewing your X follow, WhatsApp and Polymarket details. No need to refresh — this page updates once you're approved.";
+      showResult("ok", (status==="duplicate"
+        ? "<b>Already applied ✓</b> Waiting for manual review."
+        : "<b>Submitted ✓</b> Waiting for manual review.") + idNote);
+      startStatusPolling(appId);
+    }
+
     if (isFreshSubmission){
-      burstConfetti();
       // Persist so a reload or browser-back jumps straight back to this
       // confirmation instead of making the visitor redo the whole checklist.
-      state.submitted = { status, appId: appId || null, telegramLink: tgLink };
+      state.submitted = { status, appId: appId || null, telegramLink: tgLink, approved };
       state.done = TASKS.map(t => t.id);
+      saveState();
+    } else if (state.submitted && state.submitted.approved !== approved){
+      state.submitted.approved = approved;
       saveState();
     }
   } else {
     resHead.innerHTML = '<span class="spin2"></span> Awaiting details';
     showResult("bad", (data && data.message) || "Something went wrong. Please try again.");
   }
+}
+
+/* ---------- poll for manual-review approval ----------
+   Once an application is submitted but not yet approved, check back
+   periodically so the page can reveal the Telegram button without the
+   visitor needing to reload. Stops once approved (see handleResponse). */
+const STATUS_POLL_MS = 45000;
+let statusPollTimer = null;
+async function pollStatusOnce(appId){
+  if (!CONFIG.endpoint || CONFIG.endpoint.includes("REPLACE") || !appId) return;
+  try{
+    const url = CONFIG.endpoint + (CONFIG.endpoint.includes("?") ? "&" : "?") + "action=status&appId=" + encodeURIComponent(appId);
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data && data.found && data.approved && state.submitted && !state.submitted.approved){
+      handleResponse({ status: state.submitted.status, appId, approved: true, telegramLink: state.submitted.telegramLink });
+    }
+  }catch(e){ /* network hiccup — try again next tick */ }
+}
+function startStatusPolling(appId){
+  if (statusPollTimer || !appId) return;
+  statusPollTimer = setInterval(()=>pollStatusOnce(appId), STATUS_POLL_MS);
+}
+function stopStatusPolling(){
+  if (statusPollTimer){ clearInterval(statusPollTimer); statusPollTimer = null; }
 }
 
 function hideForm(){

@@ -67,10 +67,19 @@
  * header row:
  *   Timestamp | Name | Username | Email | Track | Source |
  *   Application ID | Telegram | Polymarket | Referral Code | Referred By |
- *   WhatsApp
+ *   WhatsApp | Approved
  *
  * New columns are appended after the original columns so existing rows
  * from before each change stay aligned.
+ *
+ * Manual review: every new row starts with an empty "Approved" cell. An
+ * admin reviews the applicant (X follow, WhatsApp, Polymarket account) and
+ * types TRUE into that cell once satisfied — Google Sheets stores that as
+ * a real boolean. The apply page polls doGet's ?action=status endpoint by
+ * Application ID and only reveals the "Request to join Telegram" button
+ * once it sees Approved=TRUE; until then it shows "Waiting for manual
+ * review". Typing FALSE (or leaving it blank) keeps the applicant in that
+ * waiting state.
  */
 
 const SHEET_NAME = "Applications";
@@ -80,8 +89,11 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Matches what genRefCode() in the front-end actually produces (base-36 chars,
 // uppercased). Anything outside this shape is treated as not a real code.
 const CODE_RE = /^[A-Z0-9]{4,12}$/;
-const HEADERS = ["Timestamp", "Name", "Username", "Email", "Track", "Source", "Application ID", "Telegram", "Polymarket", "Referral Code", "Referred By", "WhatsApp"];
+const HEADERS = ["Timestamp", "Name", "Username", "Email", "Track", "Source", "Application ID", "Telegram", "Polymarket", "Referral Code", "Referred By", "WhatsApp", "Approved"];
 const PENDING_HEADERS = ["Timestamp", "Ref Code", "Referred By", "X Handle", "WhatsApp"];
+// 0-based column indexes into a HEADERS row, kept in sync with HEADERS above.
+const COL_APP_ID = 6;
+const COL_APPROVED = 12;
 
 function doPost(e) {
   let body;
@@ -131,12 +143,12 @@ function doPost(e) {
   const sheet = getSheet_();
   const existing = findByEmail_(sheet, email);
   if (existing) {
-    return respond_({ status: "duplicate", appId: existing[6], telegramLink: TELEGRAM_LINK });
+    return respond_({ status: "duplicate", appId: existing[COL_APP_ID], approved: parseApproved_(existing[COL_APPROVED]), telegramLink: TELEGRAM_LINK });
   }
 
   const appId = generateAppId_();
-  sheet.appendRow([new Date(), name, xHandle, email, track, source, appId, telegram, polymarket, refCode, referredBy, whatsapp]);
-  return respond_({ status: "confirmed", appId: appId, telegramLink: TELEGRAM_LINK });
+  sheet.appendRow([new Date(), name, xHandle, email, track, source, appId, telegram, polymarket, refCode, referredBy, whatsapp, false]);
+  return respond_({ status: "confirmed", appId: appId, approved: false, telegramLink: TELEGRAM_LINK });
 }
 
 /**
@@ -180,12 +192,20 @@ function handleReferralSignal_(body) {
  *
  * GET ?action=leaderboard — used by referral-leaderboard.html to show
  * the top referrers site-wide. See leaderboard_() below.
+ *
+ * GET ?action=status&appId=MA-XXXXXXXX — used by the apply page to poll
+ * whether an admin has approved this Application ID yet. See the
+ * "Manual review" note in the file-level comment above.
  */
 function doGet(e) {
   const params = (e && e.parameter) || {};
 
   if ((params.action || "").toString().trim() === "leaderboard") {
     return respond_(leaderboard_());
+  }
+
+  if ((params.action || "").toString().trim() === "status") {
+    return respond_(statusForAppId_((params.appId || "").toString().trim()));
   }
 
   const code = normalizeCode_(params.code);
@@ -266,6 +286,34 @@ function leaderboard_() {
     totalReferrals: rows.reduce(function (sum, r) { return sum + r.count; }, 0),
     leaderboard: rows.slice(0, LIMIT)
   };
+}
+
+/**
+ * Looks up a single application by its Application ID and reports whether
+ * an admin has marked it Approved yet. { found: false } if no row carries
+ * that ID (typo, or the sheet was cleared).
+ */
+function statusForAppId_(appId) {
+  if (!appId) return { found: false, approved: false };
+  const values = getSheet_().getDataRange().getValues();
+  for (let i = 1; i < values.length; i++) {
+    if ((values[i][COL_APP_ID] || "").toString().trim() === appId) {
+      return { found: true, approved: parseApproved_(values[i][COL_APPROVED]) };
+    }
+  }
+  return { found: false, approved: false };
+}
+
+/**
+ * A cell is treated as "approved" only for an explicit true-ish value —
+ * Sheets stores a typed TRUE as a real boolean, but admins sometimes type
+ * "true"/"yes" as plain text instead. Blank, FALSE, or anything else means
+ * still pending.
+ */
+function parseApproved_(v) {
+  if (v === true) return true;
+  const s = (v || "").toString().trim().toLowerCase();
+  return s === "true" || s === "yes" || s === "1";
 }
 
 function normalizeCode_(v) {
