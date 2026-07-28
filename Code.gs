@@ -98,9 +98,12 @@ const SHEET_NAME = "Applications";
 const PENDING_SHEET_NAME = "ReferralSignals";
 const TELEGRAM_LINK = "https://t.me/MustardAcademy";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-// Matches what genRefCode() in the front-end actually produces (base-36 chars,
-// uppercased). Anything outside this shape is treated as not a real code.
-const CODE_RE = /^[A-Z0-9]{4,12}$/;
+// Matches what genRefCode() in the front-end actually produces: 6 random
+// base-36 chars + the last 2 base-36 chars of Date.now(), uppercased —
+// always exactly 8 characters. Anything outside this exact shape (e.g. a
+// hand-typed value sent straight to the API) is treated as not a real code,
+// so it can't be recorded as a referral or show up on the leaderboard.
+const CODE_RE = /^[A-Z0-9]{8}$/;
 const HEADERS = [
   "Timestamp", "Name", "Username", "Email", "Track", "Source",
   "Application ID", "Telegram", "Polymarket", "Referral Code", "Referred By", "WhatsApp",
