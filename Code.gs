@@ -330,6 +330,46 @@ function doGet(e) {
 }
 
 /**
+ * Referred By code -> count of distinct people it referred, tallied across
+ * full applications and referral signals but deduped by the *referred*
+ * person's own Referral Code. Without the dedupe, a visitor who first
+ * sends a referral signal (on filling X + WhatsApp) and later finishes
+ * their full application would leave one row in each sheet with the same
+ * "Referred By" value, double-crediting their referrer for a single
+ * person. Falls back to a row-unique key on the rare row with no Referral
+ * Code of its own, so it still counts as one referral rather than being
+ * dropped.
+ */
+function referralCounts_() {
+  const appValues = getSheet_().getDataRange().getValues();
+  const pendingValues = getPendingSheet_().getDataRange().getValues();
+  const referredPeople = {}; // referredBy -> { personKey: true, ... }
+
+  function credit(referredBy, personKey) {
+    if (!referredBy) return;
+    if (!referredPeople[referredBy]) referredPeople[referredBy] = {};
+    referredPeople[referredBy][personKey] = true;
+  }
+
+  for (let i = 1; i < appValues.length; i++) {
+    const referredBy = (appValues[i][COL_REFERRED_BY] || "").toString().trim().toUpperCase();
+    const ownCode = (appValues[i][COL_REF_CODE] || "").toString().trim().toUpperCase();
+    credit(referredBy, ownCode || ("app-" + i));
+  }
+  for (let i = 1; i < pendingValues.length; i++) {
+    const referredBy = (pendingValues[i][2] || "").toString().trim().toUpperCase();
+    const refCode = (pendingValues[i][1] || "").toString().trim().toUpperCase();
+    credit(referredBy, refCode || ("pending-" + i));
+  }
+
+  const counts = {};
+  Object.keys(referredPeople).forEach(function (code) {
+    counts[code] = Object.keys(referredPeople[code]).length;
+  });
+  return counts;
+}
+
+/**
  * Builds the site-wide referral leaderboard: every referral code that has
  * referred at least one person (via a full application or a referral
  * signal — same two sources doGet's per-code lookup counts), ranked by
@@ -348,26 +388,15 @@ function leaderboard_() {
   // Referral Code -> { name, xHandle } for codes whose owner has submitted.
   const owners = {};
   for (let i = 1; i < appValues.length; i++) {
-    const ownCode = (appValues[i][9] || "").toString().trim().toUpperCase();
+    const ownCode = (appValues[i][COL_REF_CODE] || "").toString().trim().toUpperCase();
     if (!ownCode) continue;
     owners[ownCode] = {
-      name: (appValues[i][1] || "").toString().trim(),
-      xHandle: (appValues[i][2] || "").toString().trim()
+      name: (appValues[i][COL_NAME] || "").toString().trim(),
+      xHandle: (appValues[i][COL_USERNAME] || "").toString().trim()
     };
   }
 
-  // Referred By -> count, tallied across full applications and signals.
-  const counts = {};
-  for (let i = 1; i < appValues.length; i++) {
-    const referredBy = (appValues[i][10] || "").toString().trim().toUpperCase();
-    if (referredBy) counts[referredBy] = (counts[referredBy] || 0) + 1;
-  }
-  const pendingValues = getPendingSheet_().getDataRange().getValues();
-  for (let i = 1; i < pendingValues.length; i++) {
-    const referredBy = (pendingValues[i][2] || "").toString().trim().toUpperCase();
-    if (referredBy) counts[referredBy] = (counts[referredBy] || 0) + 1;
-  }
-
+  const counts = referralCounts_();
   const rows = Object.keys(counts).map(function (code) {
     const owner = owners[code];
     return {
@@ -440,21 +469,10 @@ function findRowIndexByRefCode_(sheet, refCode) {
   return -1;
 }
 
-/** How many submissions/signals carry this code as their Referred By. */
+/** How many distinct people carry this code as their Referred By. */
 function countReferralUses_(code) {
   if (!code) return 0;
-  let count = 0;
-  const appValues = getSheet_().getDataRange().getValues();
-  for (let i = 1; i < appValues.length; i++) {
-    const referredBy = (appValues[i][COL_REFERRED_BY] || "").toString().trim().toUpperCase();
-    if (referredBy && referredBy === code) count++;
-  }
-  const pendingValues = getPendingSheet_().getDataRange().getValues();
-  for (let i = 1; i < pendingValues.length; i++) {
-    const referredBy = (pendingValues[i][2] || "").toString().trim().toUpperCase();
-    if (referredBy && referredBy === code) count++;
-  }
-  return count;
+  return referralCounts_()[code] || 0;
 }
 
 /**

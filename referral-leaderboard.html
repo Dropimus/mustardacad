@@ -320,8 +320,8 @@ async function loadLeaderboard(){
     return;
   }
   try{
-    const url = CONFIG.endpoint + (CONFIG.endpoint.includes("?") ? "&" : "?") + "action=leaderboard";
-    const res = await fetch(url);
+    const url = CONFIG.endpoint + (CONFIG.endpoint.includes("?") ? "&" : "?") + "action=leaderboard&_=" + Date.now();
+    const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) throw new Error("bad response");
     const data = await res.json();
     errEl.classList.remove("show");
