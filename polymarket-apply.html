@@ -807,9 +807,22 @@ function applyStatusData(data){
   // enough, they don't also need to have ticked each task column.
   const taskKey = { x:"xVerified", wa:"waVerified", pm:"pmVerified", share:"refVerified" };
   Object.keys(taskKey).forEach(id => {
-    if (!done.has(id)) return;
     const el = document.getElementById("task-"+id);
-    if (el) applyTaskVerification(id, el, !!data.approved || !!data[taskKey[id]]);
+    if (!el) return;
+    // "Invite a friend" is proven by real server-side referral usage, not by
+    // the visitor's own self-report — unlike the other three steps, this
+    // background poll (running every 45s once any task is done) is enough on
+    // its own to complete it, so a friend signing up after the visitor
+    // clicked "Share my link" doesn't strand them waiting on a manual
+    // "Check now" click that may never come.
+    if (id === "share" && !done.has(id) && (data.approved || data[taskKey[id]])){
+      const waitEl = el.querySelector(".checking-pill");
+      if (waitEl) waitEl.classList.remove("show");
+      complete(id, el);
+      return;
+    }
+    if (!done.has(id)) return;
+    applyTaskVerification(id, el, !!data.approved || !!data[taskKey[id]]);
   });
   saveState();
   if (state.submitted && !!data.approved !== !!state.submitted.approved){
